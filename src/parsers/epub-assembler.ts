@@ -54,6 +54,23 @@ export function assembleEpub(
   const docPaths = db.getDocPaths(bookId);
   const files = db.getFilesByBook(bookId);
 
+  // Build a path mapping: original image path → file ID
+  // Keys include the original_path and variations (basename, relative paths)
+  const pathToId = new Map<string, string>();
+  for (const file of files) {
+    const ext = mimeTypeToExt(file.mimeType);
+    const resolved = `images/${file.id}${ext}`;
+    pathToId.set(file.id, resolved);           // file:ID → resolved
+    pathToId.set(file.originalPath, resolved); // ops/images/x.jpg → resolved
+    // Also map by basename for relative path matching (../images/x.jpg)
+    const basename = file.originalPath.split('/').pop();
+    if (basename) {
+      pathToId.set(basename, resolved);
+      pathToId.set(`images/${basename}`, resolved);
+      pathToId.set(`../images/${basename}`, resolved);
+    }
+  }
+
   // If mode is 'translated', swap originalMd ↔ translatedMd so assembler uses translated
   if (options.mode === 'translated') {
     for (const block of allBlocks) {
@@ -109,12 +126,29 @@ export function assembleEpub(
       chapterTitle = mdText.replace(/^#+\s*/, '').trim() || docPath;
     }
 
-    // Build file resolver for EPUB: file:ID → images/ID.ext
-    const fileResolver = (fileId: string): string => {
-      const ext = mimeTypeToExt(
-        files.find(f => f.id === fileId)?.mimeType || 'image/jpeg'
-      );
-      return `images/${fileId}${ext}`;
+    // Build file resolver for EPUB: file:ID or original path → images/ID.ext
+    const fileResolver = (src: string): string => {
+      // Direct file:ID reference
+      if (src.startsWith('file:')) {
+        const fileId = src.slice(5);
+        const resolved = pathToId.get(fileId);
+        if (resolved) return resolved;
+        const ext = mimeTypeToExt(
+          files.find(f => f.id === fileId)?.mimeType || 'image/jpeg'
+        );
+        return `images/${fileId}${ext}`;
+      }
+      // Try original path lookup
+      const resolved = pathToId.get(src);
+      if (resolved) return resolved;
+      // Try basename match
+      const basename = src.split('/').pop();
+      if (basename) {
+        const byBasename = pathToId.get(basename);
+        if (byBasename) return byBasename;
+      }
+      // Fallback: return as-is
+      return src;
     };
 
     const bodyContent = assembleDocHtml(blocksForAssembly, db, bookId, fileResolver);

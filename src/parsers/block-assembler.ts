@@ -92,8 +92,17 @@ export function blockToHtml(block: Block, db?: TranslateDb, bookId?: string, fil
     return `<p>${htmlContent}</p>`;
   }
 
+  // Resolve image references in markdown for ALL block types (not just 'image')
+  // Handles both file:ID and original paths like ../images/x.jpg
+  let resolvedMdText = mdText;
+  if (fileResolver) {
+    resolvedMdText = resolvedMdText.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, src) => {
+      return `![${alt}](${fileResolver(src)})`;
+    });
+  }
+
   // Parse Markdown → HTML
-  let htmlContent = md.render(mdText).trim();
+  let htmlContent = md.render(resolvedMdText).trim();
 
   // Ensure XHTML compliance: self-close void elements
   htmlContent = xhtmlFix(htmlContent);
