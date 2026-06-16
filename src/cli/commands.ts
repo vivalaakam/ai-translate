@@ -12,6 +12,7 @@ import { OllamaClient } from '../translators/ollama-client.js';
 import { TranslationOrchestrator } from '../translators/orchestrator.js';
 import { SUPPORTED_INPUT_FORMATS, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_CHUNK_SIZE } from '../utils/constants.js';
 import { formatProgress, formatStats } from './progress.js';
+import { startServer } from '../web/server.js';
 import type { ParsedEpub, TranslationProgress } from '../types.js';
 
 /**
@@ -176,6 +177,23 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
 }
 
 /**
+ * Web server command handler.
+ */
+async function webCommand(options: Record<string, any>): Promise<void> {
+  const port = parseInt(options.port, 10) || 3000;
+  const url = options.url || OLLAMA_DEFAULT_URL;
+  const model = options.model || DEFAULT_MODEL;
+
+  console.log(chalk.cyan('\n🌐 Starting ai-translate web server...\n'));
+  console.log(chalk.white(`  Port:      ${port}`));
+  console.log(chalk.white(`  Ollama:    ${url}`));
+  console.log(chalk.white(`  Model:     ${model}`));
+  console.log();
+
+  startServer(port, { ollamaUrl: url, defaultModel: model });
+}
+
+/**
  * Set up and run the CLI.
  */
 export function run(): void {
@@ -184,7 +202,12 @@ export function run(): void {
   program
     .name('ai-translate')
     .description('Translate EPUB/FB2 books using Ollama models while preserving formatting')
-    .version('0.1.0')
+    .version('0.1.0');
+
+  // translate command (default)
+  program
+    .command('translate', { isDefault: true })
+    .description('Translate an EPUB/FB2 file')
     .argument('<input>', 'Input file (EPUB or FB2)')
     .option('-o, --output <path>', 'Output file path')
     .option('-l, --lang <target>', 'Target language (required)')
@@ -196,6 +219,15 @@ export function run(): void {
     .option('--dry-run', 'Show what would be translated without translating')
     .option('-v, --verbose', 'Verbose output')
     .action(translateCommand);
+
+  // web command
+  program
+    .command('web')
+    .description('Start web server for browser-based translation')
+    .option('-p, --port <port>', 'Server port', '3000')
+    .option('-u, --url <url>', 'Ollama API URL', OLLAMA_DEFAULT_URL)
+    .option('-m, --model <model>', 'Default Ollama model', DEFAULT_MODEL)
+    .action(webCommand);
 
   program.parse();
 }

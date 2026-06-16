@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
+    "web": "tsx src/index.ts web",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
@@ -28,13 +29,21 @@
     "adm-zip": "^0.5.16",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
+    "express": "^5.2.1",
     "fast-xml-parser": "^5.2.5",
+    "multer": "^2.2.0",
     "node-html-parser": "^7.0.1",
-    "ora": "^8.2.0"
+    "ora": "^8.2.0",
+    "uuid": "^14.0.0",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.1.0",
     "@types/node": "^25.9.3",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vitest": "^3.2.6"

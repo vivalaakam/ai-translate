@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Translate — EPUB/FB2 Book Translator</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #242837;
+      --border: #2e3347;
+      --text: #e4e6f0;
+      --text2: #9499b3;
+      --accent: #6c5ce7;
+      --accent2: #a29bfe;
+      --green: #00b894;
+      --red: #e17055;
+      --yellow: #fdcb6e;
+      --radius: 12px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .container {
+      max-width: 720px;
+      width: 100%;
+      padding: 24px;
+    }
+
+    /* Header */
+    .header {
+      text-align: center;
+      padding: 40px 0 32px;
+    }
+    .header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+    .header p {
+      color: var(--text2);
+      font-size: 15px;
+    }
+
+    /* Upload Card */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 40px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: var(--accent);
+      background: rgba(108, 92, 231, 0.05);
+    }
+    .drop-zone .icon {
+      font-size: 40px;
+      margin-bottom: 12px;
+    }
+    .drop-zone .label {
+      color: var(--text2);
+      font-size: 14px;
+    }
+    .drop-zone .label strong {
+      color: var(--accent2);
+    }
+    .drop-zone input[type="file"] {
+      display: none;
+    }
+    .file-info {
+      display: none;
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: var(--surface2);
+      border-radius: 8px;
+      font-size: 13px;
+      color: var(--text2);
+    }
+    .file-info.visible { display: flex; align-items: center; gap: 8px; }
+    .file-info .name { flex: 1; color: var(--text); word-break: break-all; }
+
+    /* Form */
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group.full { grid-column: 1 / -1; }
+    .form-group label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text2);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .form-group select, .form-group input {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-group select:focus, .form-group input:focus {
+      border-color: var(--accent);
+    }
+
+    .submit-btn {
+      margin-top: 16px;
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .submit-btn:hover { opacity: 0.9; }
+    .submit-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* Job List */
+    .jobs-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .jobs-header h2 {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .job-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 10px;
+      transition: border-color 0.2s;
+    }
+    .job-card.failed { border-color: var(--red); }
+    .job-card.completed { border-color: var(--green); }
+
+    .job-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .job-name {
+      font-weight: 600;
+      font-size: 14px;
+      max-width: 70%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .status-badge.queued { background: var(--surface2); color: var(--text2); }
+    .status-badge.parsing { background: rgba(253, 203, 110, 0.15); color: var(--yellow); }
+    .status-badge.translating { background: rgba(108, 92, 231, 0.15); color: var(--accent2); }
+    .status-badge.assembling { background: rgba(253, 203, 110, 0.15); color: var(--yellow); }
+    .status-badge.completed { background: rgba(0, 184, 148, 0.15); color: var(--green); }
+    .status-badge.failed { background: rgba(225, 112, 85, 0.15); color: var(--red); }
+
+    .progress-bar {
+      height: 4px;
+      background: var(--surface2);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+    .progress-bar .fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+    }
+    .progress-bar .fill.completed { background: var(--green); }
+    .progress-bar .fill.failed { background: var(--red); }
+
+    .job-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .job-message {
+      font-size: 12px;
+      color: var(--text2);
+    }
+    .job-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .btn-sm {
+      padding: 5px 12px;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .btn-sm:hover { opacity: 0.8; }
+    .btn-download {
+      background: var(--green);
+      color: white;
+    }
+    .btn-delete {
+      background: var(--surface2);
+      color: var(--text2);
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text2);
+      font-size: 14px;
+    }
+
+    /* Ollama status */
+    .ollama-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text2);
+      margin-bottom: 20px;
+    }
+    .ollama-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text2);
+    }
+    .ollama-dot.ok { background: var(--green); }
+    .ollama-dot.err { background: var(--red); }
+
+    @media (max-width: 500px) {
+      .form-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>📚 AI Translate</h1>
+      <p>Translate EPUB &amp; FB2 books with Ollama — formatting preserved</p>
+    </div>
+
+    <div class="ollama-status" id="ollamaStatus">
+      <div class="ollama-dot" id="ollamaDot"></div>
+      <span id="ollamaText">Checking Ollama…</span>
+    </div>
+
+    <div class="card">
+      <form id="uploadForm">
+        <div class="drop-zone" id="dropZone">
+          <div class="icon">📄</div>
+          <div class="label"><strong>Click to upload</strong> or drag &amp; drop your EPUB/FB2 file</div>
+          <input type="file" id="fileInput" accept=".epub,.fb2" required>
+        </div>
+        <div class="file-info" id="fileInfo">
+          <span>📎</span>
+          <span class="name" id="fileName"></span>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Source Language</label>
+            <select id="sourceLang">
+              <option value="auto">Auto-detect</option>
+              <option value="en">English</option>
+              <option value="ru">Russian</option>
+              <option value="de">German</option>
+              <option value="fr">French</option>
+              <option value="es">Spanish</option>
+              <option value="zh">Chinese</option>
+              <option value="ja">Japanese</option>
+              <option value="ko">Korean</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Target Language *</label>
+            <select id="targetLang" required>
+              <option value="">Select…</option>
+              <option value="ru">Russian</option>
+              <option value="en">English</option>
+              <option value="de">German</option>
+              <option value="fr">French</option>
+              <option value="es">Spanish</option>
+              <option value="zh">Chinese</option>
+              <option value="ja">Japanese</option>
+              <option value="ko">Korean</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group full">
+            <label>Model</label>
+            <select id="modelSelect">
+              <option value="">Loading models…</option>
+            </select>
+          </div>
+        </div>
+
+        <button type="submit" class="submit-btn" id="submitBtn" disabled>
+          🚀 Start Translation
+        </button>
+      </form>
+    </div>
+
+    <div class="jobs-header">
+      <h2>Translation Jobs</h2>
+    </div>
+
+    <div id="jobList">
+      <div class="empty-state" id="emptyState">
+        No jobs yet — upload a book to get started
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ─── State ────────────────────────────────────────────────
+    let selectedFile = null;
+    let ws = null;
+    let reconnectTimer = null;
+
+    // ─── DOM refs ────────────────────────────────────────────
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileInfo = document.getElementById('fileInfo');
+    const fileName = document.getElementById('fileName');
+    const uploadForm = document.getElementById('uploadForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const sourceLang = document.getElementById('sourceLang');
+    const targetLang = document.getElementById('targetLang');
+    const modelSelect = document.getElementById('modelSelect');
+    const jobList = document.getElementById('jobList');
+    const emptyState = document.getElementById('emptyState');
+    const ollamaDot = document.getElementById('ollamaDot');
+    const ollamaText = document.getElementById('ollamaText');
+
+    // ─── File selection ──────────────────────────────────────
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('dragover');
+    });
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length) {
+        handleFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length) {
+        handleFile(fileInput.files[0]);
+      }
+    });
+
+    function handleFile(file) {
+      const ext = file.name.split('.').pop().toLowerCase();
+      if (ext !== 'epub' && ext !== 'fb2') {
+        alert('Only .epub and .fb2 files are supported');
+        return;
+      }
+      selectedFile = file;
+      fileName.textContent = file.name;
+      fileInfo.classList.add('visible');
+      updateSubmitState();
+    }
+
+    // ─── Ollama check ────────────────────────────────────────
+    async function checkOllama() {
+      try {
+        const res = await fetch('/api/models');
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+
+        ollamaDot.className = 'ollama-dot ok';
+        ollamaText.textContent = `Ollama connected — ${data.models.length} model(s)`;
+
+        // Populate model list
+        modelSelect.innerHTML = '';
+        if (data.models.length === 0) {
+          modelSelect.innerHTML = '<option value="">No models installed</option>';
+        } else {
+          data.models.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m;
+            opt.textContent = m;
+            modelSelect.appendChild(opt);
+          });
+        }
+        updateSubmitState();
+      } catch {
+        ollamaDot.className = 'ollama-dot err';
+        ollamaText.textContent = 'Ollama not available — start with: ollama serve';
+        modelSelect.innerHTML = '<option value="">Ollama unavailable</option>';
+        updateSubmitState();
+      }
+    }
+    checkOllama();
+
+    // ─── Form submit ─────────────────────────────────────────
+    targetLang.addEventListener('change', updateSubmitState);
+
+    function updateSubmitState() {
+      submitBtn.disabled = !(selectedFile && targetLang.value && modelSelect.options.length > 0 && modelSelect.value);
+    }
+
+    uploadForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!selectedFile || !targetLang.value) return;
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      formData.append('sourceLang', sourceLang.value);
+      formData.append('targetLang', targetLang.value);
+      formData.append('model', modelSelect.value);
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = '⏳ Uploading…';
+
+      try {
+        const res = await fetch('/api/translate', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        if (res.ok) {
+          // Reset form
+          selectedFile = null;
+          fileInput.value = '';
+          fileInfo.classList.remove('visible');
+          targetLang.value = '';
+          submitBtn.textContent = '🚀 Start Translation';
+          updateSubmitState();
+
+          // Subscribe to job updates
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'subscribe', jobId: data.jobId }));
+          }
+        } else {
+          alert(data.error || 'Upload failed');
+          submitBtn.textContent = '🚀 Start Translation';
+          updateSubmitState();
+        }
+      } catch (err) {
+        alert('Upload error: ' + err.message);
+        submitBtn.textContent = '🚀 Start Translation';
+        updateSubmitState();
+      }
+    });
+
+    // ─── WebSocket ───────────────────────────────────────────
+    function connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+      ws.addEventListener('open', () => {
+        clearTimeout(reconnectTimer);
+      });
+
+      ws.addEventListener('message', (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'job:update') {
+          renderJob(msg.job);
+        }
+        if (msg.type === 'jobs:list') {
+          msg.jobs.forEach(renderJob);
+        }
+      });
+
+      ws.addEventListener('close', () => {
+        reconnectTimer = setTimeout(connectWS, 3000);
+      });
+    }
+    connectWS();
+
+    // ─── Job rendering ──────────────────────────────────────
+    const jobs = {};
+
+    function renderJob(job) {
+      jobs[job.id] = job;
+
+      let el = document.getElementById('job-' + job.id);
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'job-' + job.id;
+        el.className = 'job-card ' + job.status;
+        jobList.prepend(el);
+        emptyState.style.display = 'none';
+      }
+
+      el.className = 'job-card ' + job.status;
+
+      const progressClass = job.status === 'completed' ? 'completed' : job.status === 'failed' ? 'failed' : '';
+      const downloadBtn = job.status === 'completed'
+        ? `<button class="btn-sm btn-download" onclick="downloadJob('${job.id}')">⬇ Download</button>`
+        : '';
+      const deleteBtn = (job.status === 'completed' || job.status === 'failed')
+        ? `<button class="btn-sm btn-delete" onclick="deleteJob('${job.id}')">✕</button>`
+        : '';
+
+      const meta = job.metadata
+        ? `<span style="color:var(--text2);font-size:11px;margin-right:8px">${job.metadata.title} · ${job.metadata.author}</span>`
+        : '';
+
+      el.innerHTML = `
+        <div class="job-top">
+          <div class="job-name">${escapeHtml(job.originalFilename)}</div>
+          <span class="status-badge ${job.status}">${job.status}</span>
+        </div>
+        <div class="progress-bar">
+          <div class="fill ${progressClass}" style="width:${job.progress}%"></div>
+        </div>
+        <div class="job-meta">
+          <div class="job-message">${meta}${escapeHtml(job.message)}</div>
+          <div class="job-actions">
+            ${downloadBtn}
+            ${deleteBtn}
+          </div>
+        </div>
+      `;
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str || '';
+      return div.innerHTML;
+    }
+
+    // ─── Actions ─────────────────────────────────────────────
+    window.downloadJob = function(id) {
+      window.location.href = `/api/jobs/${id}/download`;
+    };
+
+    window.deleteJob = async function(id) {
+      await fetch(`/api/jobs/${id}`, { method: 'DELETE' });
+      const el = document.getElementById('job-' + id);
+      if (el) el.remove();
+      delete jobs[id];
+      if (Object.keys(jobs).length === 0) {
+        emptyState.style.display = '';
+      }
+    };
+  </script>
+</body>
+</html>

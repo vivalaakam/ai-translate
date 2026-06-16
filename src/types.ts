@@ -140,3 +140,44 @@ export interface TranslateDocumentOptions {
   /** Progress callback receiving TranslationProgress info */
   onProgress?: (progress: TranslationProgress) => void;
 }
+
+// ─── Web server types ────────────────────────────────────────────────
+
+/**
+ * Status of a translation job in the job queue.
+ */
+export type JobStatus = 'queued' | 'parsing' | 'translating' | 'assembling' | 'completed' | 'failed';
+
+/**
+ * A translation job tracked by the job queue manager.
+ */
+export interface TranslationJob {
+  /** Unique job ID (UUID v4) */
+  id: string;
+  /** Original filename uploaded by the user */
+  originalFilename: string;
+  /** Absolute path to the uploaded file on disk */
+  inputPath: string;
+  /** Absolute path to the translated output file (set when completed) */
+  outputPath: string | null;
+  /** Target language code (e.g. "es", "ru") */
+  targetLang: string;
+  /** Source language code (e.g. "en") or "auto" */
+  sourceLang: string;
+  /** Ollama model name */
+  model: string;
+  /** Current status */
+  status: JobStatus;
+  /** Progress percentage (0–100) */
+  progress: number;
+  /** Human-readable status message */
+  message: string;
+  /** Error message (set when status is "failed") */
+  error: string | null;
+  /** Timestamp when job was created */
+  createdAt: Date;
+  /** Timestamp when job completed or failed */
+  finishedAt: Date | null;
+  /** Book metadata (set after parsing) */
+  metadata: BookMetadata | null;
+}
