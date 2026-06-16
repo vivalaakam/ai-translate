@@ -7,7 +7,7 @@ import fs from 'fs';
 
 import { JobQueue } from './job-queue.js';
 import { runTranslation } from './pipeline.js';
-import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL } from '../utils/constants.js';
+import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_PORT } from '../utils/constants.js';
 import type { TranslationJob } from '../types.js';
 
 // Storage config
@@ -218,7 +218,7 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string 
 /**
  * Start the web server.
  */
-export function startServer(port: number = 3000, options?: { ollamaUrl?: string; defaultModel?: string }): http.Server {
+export function startServer(port: number = DEFAULT_PORT, options?: { ollamaUrl?: string; defaultModel?: string }): http.Server {
   const { server, jobQueue } = createApp(options);
 
   server.listen(port, () => {

@@ -23,11 +23,7 @@ describe('EpubWriter', () => {
   afterAll(() => {
     // Clean up output directory
     if (fs.existsSync(OUTPUT_DIR)) {
-      const files = fs.readdirSync(OUTPUT_DIR);
-      for (const file of files) {
-        fs.unlinkSync(path.join(OUTPUT_DIR, file));
-      }
-      fs.rmdirSync(OUTPUT_DIR);
+      fs.rmSync(OUTPUT_DIR, { recursive: true });
     }
   });
 

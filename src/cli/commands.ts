@@ -10,7 +10,7 @@ import { Fb2Parser } from '../parsers/fb2-parser.js';
 import { EpubWriter } from '../parsers/epub-writer.js';
 import { OllamaClient } from '../translators/ollama-client.js';
 import { TranslationOrchestrator } from '../translators/orchestrator.js';
-import { SUPPORTED_INPUT_FORMATS, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_CHUNK_SIZE } from '../utils/constants.js';
+import { SUPPORTED_INPUT_FORMATS, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_CHUNK_SIZE, DEFAULT_PORT } from '../utils/constants.js';
 import { formatProgress, formatStats } from './progress.js';
 import { startServer } from '../web/server.js';
 import type { ParsedEpub, TranslationProgress } from '../types.js';
@@ -180,7 +180,7 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
  * Web server command handler.
  */
 async function webCommand(options: Record<string, any>): Promise<void> {
-  const port = parseInt(options.port, 10) || 3000;
+  const port = parseInt(options.port, 10) || DEFAULT_PORT;
   const url = options.url || OLLAMA_DEFAULT_URL;
   const model = options.model || DEFAULT_MODEL;
 
@@ -224,7 +224,7 @@ export function run(): void {
   program
     .command('web')
     .description('Start web server for browser-based translation')
-    .option('-p, --port <port>', 'Server port', '3000')
+    .option('-p, --port <port>', 'Server port', String(DEFAULT_PORT))
     .option('-u, --url <url>', 'Ollama API URL', OLLAMA_DEFAULT_URL)
     .option('-m, --model <model>', 'Default Ollama model', DEFAULT_MODEL)
     .action(webCommand);
