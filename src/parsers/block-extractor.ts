@@ -43,6 +43,43 @@ export function extractBlocksFromDoc(doc: ContentDoc, bookId: string, imageMap: 
   // Don't escape Markdown special chars inside code
   turndown.keep(['code']);
 
+  // ── Custom rules for inline formatting ──────────────────────
+  // <u> → ++underline++ (custom syntax, will be rendered back to <u>)
+  turndown.addRule('underline', {
+    filter: 'u',
+    replacement: (content) => `++${content}++`,
+  });
+
+  // <span style="font-style:italic"> → _italic_
+  turndown.addRule('styledItalic', {
+    filter: (node) => {
+      if (node.nodeName !== 'SPAN') return false;
+      const style = node.getAttribute('style') || '';
+      return /font-style\s*:\s*(italic|oblique)/i.test(style);
+    },
+    replacement: (content) => `_${content}_`,
+  });
+
+  // <span style="font-weight:bold/700"> → **bold**
+  turndown.addRule('styledBold', {
+    filter: (node) => {
+      if (node.nodeName !== 'SPAN') return false;
+      const style = node.getAttribute('style') || '';
+      return /font-weight\s*:\s*(bold|[7-9]00)/i.test(style);
+    },
+    replacement: (content) => `**${content}**`,
+  });
+
+  // <span style="text-decoration:underline"> → ++underline++
+  turndown.addRule('styledUnderline', {
+    filter: (node) => {
+      if (node.nodeName !== 'SPAN') return false;
+      const style = node.getAttribute('style') || '';
+      return /text-decoration\s*:\s*.*underline/i.test(style);
+    },
+    replacement: (content) => `++${content}++`,
+  });
+
   const blocks: Block[] = [];
   const body = doc.dom.querySelector('body') || doc.dom;
   const children = body.childNodes;

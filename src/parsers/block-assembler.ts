@@ -9,6 +9,39 @@ const md = new MarkdownIt({
   xhtmlOut: true,  // XHTML-compliant output: <img />, <br />, <hr />
 });
 
+// ── Custom rule: ++underline++ → <u>underline</u> ─────────────
+// Match ++content++ — similar to **bold** but with plus signs
+md.inline.ruler.push('underline', (state, silent) => {
+  const start = state.pos;
+  const marker = state.src.charCodeAt(start);
+
+  // Must start with ++
+  if (marker !== 0x2B /* + */) return false;
+  if (state.src.charCodeAt(start + 1) !== 0x2B) return false;
+
+  const max = state.posMax;
+
+  // Find closing ++
+  let pos = start + 2;
+  while (pos < max - 1) {
+    if (state.src.charCodeAt(pos) === 0x2B && state.src.charCodeAt(pos + 1) === 0x2B) {
+      // Found closing ++
+      if (!silent) {
+        const token = state.push('underline_open', 'u', 1);
+        token.markup = '++';
+        const contentToken = state.push('text', '', 0);
+        contentToken.content = state.src.slice(start + 2, pos);
+        const closeToken = state.push('underline_close', 'u', -1);
+        closeToken.markup = '++';
+      }
+      state.pos = pos + 2;
+      return true;
+    }
+    pos++;
+  }
+  return false;
+});
+
 /**
  * BlockType → default HTML tag mapping.
  */
