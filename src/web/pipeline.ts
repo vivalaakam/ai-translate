@@ -11,7 +11,84 @@ import { assembleDocHtml } from '../parsers/block-assembler.js';
 import { JobQueue as JQStatic } from '../web/job-queue.js';
 import { JobQueue } from '../web/job-queue.js';
 import { parseProvider, ensureModelLoaded, unloadIfWeLoaded } from '../translators/model-manager.js';
-import type { TranslationJob } from '../types.js';
+import type { TranslationJob, BookRecord } from '../types.js';
+
+/**
+ * Upload a book: parse + extract blocks → store in SQLite.
+ * No translation — just indexing the book for later translation.
+ *
+ * Returns the book record from DB.
+ */
+export async function runUpload(
+  job: TranslationJob,
+  jobQueue: JobQueue,
+  options?: { dbPath?: string },
+): Promise<BookRecord> {
+  const db = new TranslateDb(options?.dbPath);
+
+  try {
+    // ── Parse ────────────────────────────────────────────────
+    jobQueue.updateStatus(job.id, 'parsing', 'Parsing file...', 5);
+
+    const ext = path.extname(job.inputPath).toLowerCase();
+    const fileBuffer = fs.readFileSync(job.inputPath);
+    const bookId = generateBookId(fileBuffer);
+
+    // Check if book already exists in DB
+    const existingBook = db.getBook(bookId);
+    if (existingBook) {
+      jobQueue.updateStatus(job.id, 'completed', `Book already in DB: "${existingBook.title}"`, 100);
+      jobQueue.setMetadata(job.id, {
+        title: existingBook.title,
+        author: existingBook.author,
+        language: existingBook.language,
+        format: ext.replace('.', ''),
+      });
+      return existingBook;
+    }
+
+    let parsed;
+    if (ext === '.epub') {
+      const parser = new EpubParser(job.inputPath);
+      parsed = await parser.parse();
+    } else if (ext === '.fb2') {
+      const parser = new Fb2Parser(job.inputPath);
+      parsed = await parser.parse();
+    } else {
+      throw new Error(`Unsupported file format: ${ext}`);
+    }
+
+    // ── Extract blocks ──────────────────────────────────────
+    jobQueue.updateStatus(job.id, 'parsing', 'Extracting blocks...', 30);
+
+    const blocks = extractAllBlocks(parsed.contentDocs, bookId);
+
+    // Store book record
+    db.insertBook({
+      id: bookId,
+      title: parsed.metadata.title,
+      author: parsed.metadata.author,
+      language: parsed.metadata.language,
+      filename: job.originalFilename,
+      totalBlocks: blocks.length,
+    });
+
+    // Store blocks
+    db.insertBlocks(blocks);
+
+    // Store metadata on job
+    jobQueue.setMetadata(job.id, parsed.metadata);
+    jobQueue.updateStatus(job.id, 'completed', `Parsed: "${parsed.metadata.title}" — ${blocks.length} blocks`, 100);
+
+    return db.getBook(bookId)!;
+  } catch (err: any) {
+    jobQueue.setError(job.id, err.message || 'Unknown error');
+    jobQueue.updateStatus(job.id, 'failed', `Failed: ${err.message}`, 0);
+    throw err;
+  } finally {
+    db.close();
+  }
+}
 
 /**
  * Run the full block-based translation pipeline for a job.

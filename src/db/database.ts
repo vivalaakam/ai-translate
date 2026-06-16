@@ -88,7 +88,7 @@ export class TranslateDb {
   /**
    * Insert a new book record.
    */
-  insertBook(book: Omit<BookRecord, 'createdAt' | 'completedAt' | 'translatedBlocks'> & { translatedBlocks?: number }): void {
+  insertBook(book: Partial<Omit<BookRecord, 'createdAt' | 'completedAt' | 'translatedBlocks'>> & { id: string; title: string; author: string; language: string; filename: string; totalBlocks: number; translatedBlocks?: number }): void {
     this.db.prepare(`
       INSERT INTO books (id, title, author, language, filename, total_blocks, translated_blocks, target_lang, source_lang, model)
       VALUES (@id, @title, @author, @language, @filename, @totalBlocks, @translatedBlocks, @targetLang, @sourceLang, @model)

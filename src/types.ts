@@ -43,6 +43,8 @@ export interface BookMetadata {
   author: string;
   /** Source language code (e.g. "en", "ru") */
   language: string;
+  /** File format (e.g. "epub", "fb2") */
+  format?: string;
 }
 
 /**

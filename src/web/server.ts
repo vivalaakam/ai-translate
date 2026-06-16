@@ -6,8 +6,9 @@ import path from 'path';
 import fs from 'fs';
 
 import { JobQueue } from './job-queue.js';
-import { runTranslation } from './pipeline.js';
-import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER } from '../utils/constants.js';
+import { runTranslation, runUpload } from './pipeline.js';
+import { TranslateDb } from '../db/database.js';
+import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER, UPLOAD_ONLY } from '../utils/constants.js';
 import type { TranslationJob } from '../types.js';
 
 // Storage config
@@ -43,7 +44,7 @@ const wsClients: Set<WSClient> = new Set();
 /**
  * Create and configure the Express app + WebSocket server.
  */
-export function createApp(options?: { ollamaUrl?: string; defaultModel?: string; apiKey?: string; provider?: string }): {
+export function createApp(options?: { ollamaUrl?: string; defaultModel?: string; apiKey?: string; provider?: string; dbPath?: string }): {
   app: express.Application;
   server: http.Server;
   jobQueue: JobQueue;
@@ -54,6 +55,7 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
   const defaultModel = options?.defaultModel || DEFAULT_MODEL;
   const apiKey = options?.apiKey || DEFAULT_API_KEY;
   const provider = options?.provider || DEFAULT_LLM_PROVIDER;
+  const dbPath = options?.dbPath;
 
   // Job queue with WebSocket broadcast
   const jobQueue = new JobQueue((job) => {
@@ -109,6 +111,41 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
 
   // ─── API Routes ─────────────────────────────────────────────
 
+  // POST /api/upload — upload and parse a book (no translation)
+  app.post('/api/upload', upload.single('file'), async (req, res): Promise<void> => {
+    try {
+      if (!req.file) {
+        res.status(400).json({ error: 'No file uploaded' });
+        return;
+      }
+
+      const job = jobQueue.create({
+        originalFilename: req.file.originalname,
+        inputPath: req.file.path,
+        targetLang: '',
+        sourceLang: 'auto',
+        model: '',
+      });
+
+      // Run upload-only (parse + extract blocks)
+      runUpload(job, jobQueue, { dbPath }).then((bookRecord) => {
+        // Attach book info to job for the response
+        job.metadata = {
+          title: bookRecord.title,
+          author: bookRecord.author,
+          language: bookRecord.language,
+          format: path.extname(job.originalFilename).replace('.', ''),
+        };
+      }).catch(() => {
+        // Error handled inside runUpload
+      });
+
+      res.json({ jobId: job.id, status: job.status, uploadOnly: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // POST /api/translate — upload file and start translation
   app.post('/api/translate', upload.single('file'), async (req, res): Promise<void> => {
     try {
@@ -137,9 +174,53 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
       });
 
       // Start translation in background
-      runTranslation(job, jobQueue, { ollamaUrl, apiKey, provider }).catch(() => {
+      runTranslation(job, jobQueue, { ollamaUrl, apiKey, provider, dbPath }).catch(() => {
         // Error is already handled inside runTranslation
       });
+
+      res.json({ jobId: job.id, status: job.status });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/books/:id/translate — start translating an already-uploaded book
+  app.post('/api/books/:id/translate', async (req, res): Promise<void> => {
+    try {
+      const db = new TranslateDb(dbPath);
+      const book = db.getBook(req.params.id);
+      db.close();
+
+      if (!book) {
+        res.status(404).json({ error: 'Book not found' });
+        return;
+      }
+
+      const targetLang = req.body.targetLang;
+      if (!targetLang) {
+        res.status(400).json({ error: 'Target language is required' });
+        return;
+      }
+
+      const sourceLang = req.body.sourceLang || 'auto';
+      const model = req.body.model || defaultModel;
+
+      // Find the original upload for this book
+      const uploadJobs = jobQueue.list().filter(j => j.originalFilename === book.filename);
+      if (uploadJobs.length === 0) {
+        res.status(404).json({ error: 'Original file not found — re-upload the book' });
+        return;
+      }
+
+      const job = jobQueue.create({
+        originalFilename: book.filename,
+        inputPath: uploadJobs[0].inputPath,
+        targetLang,
+        sourceLang,
+        model,
+      });
+
+      runTranslation(job, jobQueue, { ollamaUrl, apiKey, provider, dbPath }).catch(() => {});
 
       res.json({ jobId: job.id, status: job.status });
     } catch (err: any) {
@@ -193,6 +274,68 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
     res.json({ deleted: true });
   });
 
+  // GET /api/books — list all books in the database
+  app.get('/api/books', (_req, res) => {
+    try {
+      const db = new TranslateDb(dbPath);
+      const books = db.listBooks();
+      db.close();
+      res.json({ books });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/books/:id — get a book with block details
+  app.get('/api/books/:id', (req, res) => {
+    try {
+      const db = new TranslateDb(dbPath);
+      const book = db.getBook(req.params.id);
+      if (!book) {
+        db.close();
+        res.status(404).json({ error: 'Book not found' });
+        return;
+      }
+      const counts = db.countBlocks(book.id);
+      const docPaths = db.getDocPaths(book.id);
+      const chapters = docPaths.map(dp => {
+        const blocks = db.getBlocksByDoc(book.id, dp);
+        return {
+          docPath: dp,
+          totalBlocks: blocks.length,
+          translatedBlocks: blocks.filter(b => b.translatedMd !== null).length,
+        };
+      });
+      db.close();
+
+      res.json({
+        ...book,
+        blockCounts: counts,
+        chapters,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // DELETE /api/books/:id — delete a book and its blocks
+  app.delete('/api/books/:id', (req, res) => {
+    try {
+      const db = new TranslateDb(dbPath);
+      const book = db.getBook(req.params.id);
+      if (!book) {
+        db.close();
+        res.status(404).json({ error: 'Book not found' });
+        return;
+      }
+      db.deleteBook(req.params.id);
+      db.close();
+      res.json({ deleted: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // GET /api/models — list available models via OpenAI-compatible API
   app.get('/api/models', async (_req, res) => {
     try {
@@ -213,6 +356,15 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
     }
   });
 
+  // GET /api/config — return client-side config (uploadOnly flag, defaultModel)
+  app.get('/api/config', (_req, res) => {
+    res.json({
+      uploadOnly: UPLOAD_ONLY,
+      defaultModel,
+      defaultProvider: provider,
+    });
+  });
+
   // GET /api/health — health check
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', uptime: process.uptime() });
@@ -230,6 +382,9 @@ export function startServer(port: number = DEFAULT_PORT, options?: { ollamaUrl?:
   server.listen(port, () => {
     console.log(`🌐 ai-translate web server running at http://localhost:${port}`);
     console.log(`   API: http://localhost:${port}/api/translate`);
+    if (UPLOAD_ONLY) {
+      console.log(`   Mode: UPLOAD_ONLY — books are parsed but not translated`);
+    }
     console.log(`   WebSocket: ws://localhost:${port}/ws`);
   });
 

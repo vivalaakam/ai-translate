@@ -17,6 +17,7 @@
       --green: #00b894;
       --red: #e17055;
       --yellow: #fdcb6e;
+      --blue: #74b9ff;
       --radius: 12px;
     }
 
@@ -56,7 +57,35 @@
       font-size: 15px;
     }
 
-    /* Upload Card */
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 4px;
+      margin-bottom: 20px;
+    }
+    .tab {
+      flex: 1;
+      padding: 10px;
+      text-align: center;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text2);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: none;
+      background: transparent;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active {
+      background: var(--accent);
+      color: white;
+    }
+
+    /* Card */
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -77,20 +106,10 @@
       border-color: var(--accent);
       background: rgba(108, 92, 231, 0.05);
     }
-    .drop-zone .icon {
-      font-size: 40px;
-      margin-bottom: 12px;
-    }
-    .drop-zone .label {
-      color: var(--text2);
-      font-size: 14px;
-    }
-    .drop-zone .label strong {
-      color: var(--accent2);
-    }
-    .drop-zone input[type="file"] {
-      display: none;
-    }
+    .drop-zone .icon { font-size: 40px; margin-bottom: 12px; }
+    .drop-zone .label { color: var(--text2); font-size: 14px; }
+    .drop-zone .label strong { color: var(--accent2); }
+    .drop-zone input[type="file"] { display: none; }
     .file-info {
       display: none;
       margin-top: 12px;
@@ -133,12 +152,15 @@
       border-color: var(--accent);
     }
 
-    .submit-btn {
+    .btn-row {
+      display: flex;
+      gap: 10px;
       margin-top: 16px;
-      width: 100%;
+    }
+
+    .btn {
+      flex: 1;
       padding: 14px;
-      background: linear-gradient(135deg, var(--accent), var(--accent2));
-      color: white;
       border: none;
       border-radius: 8px;
       font-size: 15px;
@@ -146,64 +168,69 @@
       cursor: pointer;
       transition: opacity 0.2s;
     }
-    .submit-btn:hover { opacity: 0.9; }
-    .submit-btn:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
+    .btn:hover { opacity: 0.9; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: white;
+    }
+    .btn-secondary {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-green {
+      background: var(--green);
+      color: white;
     }
 
-    /* Job List */
-    .jobs-header {
+    /* Book list */
+    .section-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
       margin-bottom: 12px;
     }
-    .jobs-header h2 {
-      font-size: 18px;
-      font-weight: 600;
-    }
+    .section-header h2 { font-size: 18px; font-weight: 600; }
 
-    .job-card {
+    .book-card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 16px;
       margin-bottom: 10px;
+      cursor: pointer;
       transition: border-color 0.2s;
     }
-    .job-card.failed { border-color: var(--red); }
-    .job-card.completed { border-color: var(--green); }
+    .book-card:hover { border-color: var(--accent); }
+    .book-card.completed { border-color: var(--green); }
+    .book-card.translating { border-color: var(--accent); }
 
-    .job-top {
+    .book-top {
       display: flex;
       justify-content: space-between;
-      align-items: center;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }
+    .book-title {
+      font-weight: 600;
+      font-size: 15px;
+      flex: 1;
+      margin-right: 12px;
+    }
+    .book-author {
+      font-size: 13px;
+      color: var(--text2);
       margin-bottom: 10px;
     }
-    .job-name {
-      font-weight: 600;
-      font-size: 14px;
-      max-width: 70%;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    .book-stats {
+      display: flex;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--text2);
+      margin-bottom: 10px;
     }
-
-    .status-badge {
-      font-size: 11px;
-      font-weight: 600;
-      padding: 3px 10px;
-      border-radius: 20px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .status-badge.queued { background: var(--surface2); color: var(--text2); }
-    .status-badge.parsing { background: rgba(253, 203, 110, 0.15); color: var(--yellow); }
-    .status-badge.translating { background: rgba(108, 92, 231, 0.15); color: var(--accent2); }
-    .status-badge.assembling { background: rgba(253, 203, 110, 0.15); color: var(--yellow); }
-    .status-badge.completed { background: rgba(0, 184, 148, 0.15); color: var(--green); }
-    .status-badge.failed { background: rgba(225, 112, 85, 0.15); color: var(--red); }
+    .book-stats span { display: flex; align-items: center; gap: 4px; }
 
     .progress-bar {
       height: 4px;
@@ -221,19 +248,12 @@
     .progress-bar .fill.completed { background: var(--green); }
     .progress-bar .fill.failed { background: var(--red); }
 
-    .job-meta {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .job-message {
-      font-size: 12px;
-      color: var(--text2);
-    }
-    .job-actions {
+    .book-actions {
       display: flex;
       gap: 8px;
+      margin-top: 10px;
     }
+
     .btn-sm {
       padding: 5px 12px;
       border: none;
@@ -244,14 +264,9 @@
       transition: opacity 0.2s;
     }
     .btn-sm:hover { opacity: 0.8; }
-    .btn-download {
-      background: var(--green);
-      color: white;
-    }
-    .btn-delete {
-      background: var(--surface2);
-      color: var(--text2);
-    }
+    .btn-translate { background: var(--accent); color: white; }
+    .btn-download { background: var(--green); color: white; }
+    .btn-delete { background: var(--surface2); color: var(--text2); }
 
     .empty-state {
       text-align: center;
@@ -260,8 +275,8 @@
       font-size: 14px;
     }
 
-    /* Ollama status */
-    .ollama-status {
+    /* API status */
+    .api-status {
       display: flex;
       align-items: center;
       gap: 6px;
@@ -269,17 +284,67 @@
       color: var(--text2);
       margin-bottom: 20px;
     }
-    .ollama-dot {
+    .api-dot {
       width: 8px;
       height: 8px;
       border-radius: 50%;
       background: var(--text2);
     }
-    .ollama-dot.ok { background: var(--green); }
-    .ollama-dot.err { background: var(--red); }
+    .api-dot.ok { background: var(--green); }
+    .api-dot.err { background: var(--red); }
+
+    /* Translate modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.visible { display: flex; }
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      width: 90%;
+      max-width: 480px;
+    }
+    .modal h3 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    .modal .book-info {
+      font-size: 13px;
+      color: var(--text2);
+      margin-bottom: 16px;
+    }
+
+    /* Status badge */
+    .status-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+    }
+    .status-badge.queued { background: var(--surface2); color: var(--text2); }
+    .status-badge.parsing { background: rgba(253, 203, 110, 0.15); color: var(--yellow); }
+    .status-badge.translating { background: rgba(108, 92, 231, 0.15); color: var(--accent2); }
+    .status-badge.assembling { background: rgba(253, 203, 110, 0.15); color: var(--yellow); }
+    .status-badge.completed { background: rgba(0, 184, 148, 0.15); color: var(--green); }
+    .status-badge.failed { background: rgba(225, 112, 85, 0.15); color: var(--red); }
+
+    .job-message { font-size: 12px; color: var(--text2); }
 
     @media (max-width: 500px) {
       .form-row { grid-template-columns: 1fr; }
+      .btn-row { flex-direction: column; }
     }
   </style>
 </head>
@@ -287,79 +352,140 @@
   <div class="container">
     <div class="header">
       <h1>📚 AI Translate</h1>
-      <p>Translate EPUB &amp; FB2 books with Ollama — formatting preserved</p>
+      <p>Translate EPUB &amp; FB2 books — formatting preserved</p>
     </div>
 
-    <div class="ollama-status" id="ollamaStatus">
-      <div class="ollama-dot" id="ollamaDot"></div>
-      <span id="ollamaText">Checking Ollama…</span>
+    <div class="api-status" id="apiStatus">
+      <div class="api-dot" id="apiDot"></div>
+      <span id="apiText">Checking API…</span>
     </div>
 
-    <div class="card">
-      <form id="uploadForm">
-        <div class="drop-zone" id="dropZone">
-          <div class="icon">📄</div>
-          <div class="label"><strong>Click to upload</strong> or drag &amp; drop your EPUB/FB2 file</div>
-          <input type="file" id="fileInput" accept=".epub,.fb2" required>
-        </div>
-        <div class="file-info" id="fileInfo">
-          <span>📎</span>
-          <span class="name" id="fileName"></span>
-        </div>
+    <!-- Tabs: Upload / Library -->
+    <div class="tabs">
+      <button class="tab active" data-tab="upload" onclick="switchTab('upload')">📤 Upload</button>
+      <button class="tab" data-tab="library" onclick="switchTab('library')">📖 Library</button>
+    </div>
 
-        <div class="form-row">
-          <div class="form-group">
-            <label>Source Language</label>
-            <select id="sourceLang">
-              <option value="auto">Auto-detect</option>
-              <option value="en">English</option>
-              <option value="ru">Russian</option>
-              <option value="de">German</option>
-              <option value="fr">French</option>
-              <option value="es">Spanish</option>
-              <option value="zh">Chinese</option>
-              <option value="ja">Japanese</option>
-              <option value="ko">Korean</option>
-            </select>
+    <!-- Upload tab -->
+    <div id="uploadTab">
+      <div class="card">
+        <form id="uploadForm">
+          <div class="drop-zone" id="dropZone">
+            <div class="icon">📄</div>
+            <div class="label"><strong>Click to upload</strong> or drag &amp; drop your EPUB/FB2 file</div>
+            <input type="file" id="fileInput" accept=".epub,.fb2" required>
           </div>
-          <div class="form-group">
-            <label>Target Language *</label>
-            <select id="targetLang" required>
-              <option value="">Select…</option>
-              <option value="ru">Russian</option>
-              <option value="en">English</option>
-              <option value="de">German</option>
-              <option value="fr">French</option>
-              <option value="es">Spanish</option>
-              <option value="zh">Chinese</option>
-              <option value="ja">Japanese</option>
-              <option value="ko">Korean</option>
-            </select>
+          <div class="file-info" id="fileInfo">
+            <span>📎</span>
+            <span class="name" id="fileName"></span>
           </div>
-        </div>
 
-        <div class="form-row">
-          <div class="form-group full">
-            <label>Model</label>
-            <select id="modelSelect">
-              <option value="">Loading models…</option>
-            </select>
+          <div class="form-row" id="translateOptions" style="display:none">
+            <div class="form-group">
+              <label>Source Language</label>
+              <select id="sourceLang">
+                <option value="auto">Auto-detect</option>
+                <option value="en">English</option>
+                <option value="ru">Russian</option>
+                <option value="de">German</option>
+                <option value="fr">French</option>
+                <option value="es">Spanish</option>
+                <option value="zh">Chinese</option>
+                <option value="ja">Japanese</option>
+                <option value="ko">Korean</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Target Language *</label>
+              <select id="targetLang" required>
+                <option value="">Select…</option>
+                <option value="ru">Russian</option>
+                <option value="en">English</option>
+                <option value="de">German</option>
+                <option value="fr">French</option>
+                <option value="es">Spanish</option>
+                <option value="zh">Chinese</option>
+                <option value="ja">Japanese</option>
+                <option value="ko">Korean</option>
+              </select>
+            </div>
           </div>
-        </div>
 
-        <button type="submit" class="submit-btn" id="submitBtn" disabled>
-          🚀 Start Translation
-        </button>
-      </form>
+          <div class="form-row" id="modelRow" style="display:none">
+            <div class="form-group full">
+              <label>Model</label>
+              <select id="modelSelect">
+                <option value="">Loading models…</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="btn-row">
+            <button type="submit" class="btn btn-secondary" id="uploadBtn">📤 Upload Only</button>
+            <button type="button" class="btn btn-primary" id="translateBtn" disabled>🚀 Upload &amp; Translate</button>
+          </div>
+        </form>
+      </div>
     </div>
 
-    <div class="jobs-header">
-      <h2>Translation Jobs</h2>
+    <!-- Library tab -->
+    <div id="libraryTab" style="display:none">
+      <div class="section-header">
+        <h2>Books</h2>
+        <span id="bookCount" style="font-size:13px;color:var(--text2)"></span>
+      </div>
+      <div id="bookList">
+        <div class="empty-state" id="bookEmpty">No books yet — upload one to get started</div>
+      </div>
     </div>
+  </div>
 
-    <div id="jobList">
-      <div class="empty-state" id="emptyState">
-        No jobs yet — upload a book to get started
+  <!-- Translate modal -->
+  <div class="modal-overlay" id="translateModal">
+    <div class="modal">
+      <h3>🌐 Translate Book</h3>
+      <div class="book-info" id="modalBookInfo"></div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Source Language</label>
+          <select id="modalSourceLang">
+            <option value="auto">Auto-detect</option>
+            <option value="en">English</option>
+            <option value="ru">Russian</option>
+            <option value="de">German</option>
+            <option value="fr">French</option>
+            <option value="es">Spanish</option>
+            <option value="zh">Chinese</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Target Language *</label>
+          <select id="modalTargetLang" required>
+            <option value="">Select…</option>
+            <option value="ru">Russian</option>
+            <option value="en">English</option>
+            <option value="de">German</option>
+            <option value="fr">French</option>
+            <option value="es">Spanish</option>
+            <option value="zh">Chinese</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row" style="margin-top:12px">
+        <div class="form-group full">
+          <label>Model</label>
+          <select id="modalModel">
+            <option value="">Loading models…</option>
+          </select>
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:16px">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-green" id="modalTranslateBtn" disabled onclick="startTranslateFromModal()">🚀 Start Translation</button>
       </div>
     </div>
   </div>
@@ -369,6 +495,9 @@
     let selectedFile = null;
     let ws = null;
     let reconnectTimer = null;
+    let appConfig = { uploadOnly: false, defaultModel: '', defaultProvider: '' };
+    let currentBookId = null;
+    let models = [];
 
     // ─── DOM refs ────────────────────────────────────────────
     const dropZone = document.getElementById('dropZone');
@@ -376,37 +505,38 @@
     const fileInfo = document.getElementById('fileInfo');
     const fileName = document.getElementById('fileName');
     const uploadForm = document.getElementById('uploadForm');
-    const submitBtn = document.getElementById('submitBtn');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const translateBtn = document.getElementById('translateBtn');
+    const translateOptions = document.getElementById('translateOptions');
+    const modelRow = document.getElementById('modelRow');
     const sourceLang = document.getElementById('sourceLang');
     const targetLang = document.getElementById('targetLang');
     const modelSelect = document.getElementById('modelSelect');
-    const jobList = document.getElementById('jobList');
-    const emptyState = document.getElementById('emptyState');
-    const ollamaDot = document.getElementById('ollamaDot');
-    const ollamaText = document.getElementById('ollamaText');
+    const apiDot = document.getElementById('apiDot');
+    const apiText = document.getElementById('apiText');
+    const bookList = document.getElementById('bookList');
+    const bookEmpty = document.getElementById('bookEmpty');
+
+    // ─── Tabs ────────────────────────────────────────────────
+    window.switchTab = function(tab) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
+      document.getElementById('uploadTab').style.display = tab === 'upload' ? '' : 'none';
+      document.getElementById('libraryTab').style.display = tab === 'library' ? '' : 'none';
+      if (tab === 'library') loadBooks();
+    };
 
     // ─── File selection ──────────────────────────────────────
     dropZone.addEventListener('click', () => fileInput.click());
-
-    dropZone.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      dropZone.classList.add('dragover');
-    });
-    dropZone.addEventListener('dragleave', () => {
-      dropZone.classList.remove('dragover');
-    });
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
     dropZone.addEventListener('drop', (e) => {
       e.preventDefault();
       dropZone.classList.remove('dragover');
-      if (e.dataTransfer.files.length) {
-        handleFile(e.dataTransfer.files[0]);
-      }
+      if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
     });
-
     fileInput.addEventListener('change', () => {
-      if (fileInput.files.length) {
-        handleFile(fileInput.files[0]);
-      }
+      if (fileInput.files.length) handleFile(fileInput.files[0]);
     });
 
     function handleFile(file) {
@@ -418,50 +548,108 @@
       selectedFile = file;
       fileName.textContent = file.name;
       fileInfo.classList.add('visible');
-      updateSubmitState();
+
+      // Show translate options when file is selected
+      translateOptions.style.display = '';
+      if (!appConfig.uploadOnly) modelRow.style.display = '';
+      updateBtnState();
     }
 
-    // ─── Ollama check ────────────────────────────────────────
-    async function checkOllama() {
+    // ─── API check ──────────────────────────────────────────
+    async function initApp() {
+      // Load config
+      try {
+        const res = await fetch('/api/config');
+        if (res.ok) appConfig = await res.json();
+      } catch {}
+
+      // Check models API
       try {
         const res = await fetch('/api/models');
         if (!res.ok) throw new Error();
         const data = await res.json();
+        models = data.models || [];
 
-        ollamaDot.className = 'ollama-dot ok';
-        ollamaText.textContent = `Ollama connected — ${data.models.length} model(s)`;
+        apiDot.className = 'api-dot ok';
+        apiText.textContent = `API connected — ${models.length} model(s)`;
 
-        // Populate model list
-        modelSelect.innerHTML = '';
-        if (data.models.length === 0) {
-          modelSelect.innerHTML = '<option value="">No models installed</option>';
-        } else {
-          data.models.forEach(m => {
-            const opt = document.createElement('option');
-            opt.value = m;
-            opt.textContent = m;
-            modelSelect.appendChild(opt);
-          });
-        }
-        updateSubmitState();
+        populateModelSelect(modelSelect);
+        populateModelSelect(document.getElementById('modalModel'));
+        updateBtnState();
       } catch {
-        ollamaDot.className = 'ollama-dot err';
-        ollamaText.textContent = 'Ollama not available — start with: ollama serve';
-        modelSelect.innerHTML = '<option value="">Ollama unavailable</option>';
-        updateSubmitState();
+        apiDot.className = 'api-dot err';
+        apiText.textContent = 'API not available';
+        modelSelect.innerHTML = '<option value="">API unavailable</option>';
+        document.getElementById('modalModel').innerHTML = '<option value="">API unavailable</option>';
+      }
+
+      // If uploadOnly, hide translate button
+      if (appConfig.uploadOnly) {
+        translateBtn.style.display = 'none';
+        modelRow.style.display = 'none';
       }
     }
-    checkOllama();
+    initApp();
 
-    // ─── Form submit ─────────────────────────────────────────
-    targetLang.addEventListener('change', updateSubmitState);
-
-    function updateSubmitState() {
-      submitBtn.disabled = !(selectedFile && targetLang.value && modelSelect.options.length > 0 && modelSelect.value);
+    function populateModelSelect(sel) {
+      sel.innerHTML = '';
+      if (models.length === 0) {
+        sel.innerHTML = '<option value="">No models found</option>';
+        return;
+      }
+      models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        if (m === appConfig.defaultModel) opt.selected = true;
+        sel.appendChild(opt);
+      });
     }
 
+    // ─── Form state ─────────────────────────────────────────
+    targetLang.addEventListener('change', updateBtnState);
+
+    function updateBtnState() {
+      const hasFile = !!selectedFile;
+      uploadBtn.disabled = !hasFile;
+      translateBtn.disabled = !hasFile || !targetLang.value || (modelSelect.options.length > 0 && !modelSelect.value);
+    }
+
+    // ─── Upload Only ────────────────────────────────────────
     uploadForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (!selectedFile) return;
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      uploadBtn.disabled = true;
+      translateBtn.disabled = true;
+      uploadBtn.textContent = '⏳ Uploading…';
+
+      try {
+        const res = await fetch('/api/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        if (res.ok) {
+          resetForm();
+          // Switch to library
+          switchTab('library');
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'subscribe', jobId: data.jobId }));
+          }
+        } else {
+          alert(data.error || 'Upload failed');
+        }
+      } catch (err) {
+        alert('Upload error: ' + err.message);
+      }
+      uploadBtn.textContent = '📤 Upload Only';
+      updateBtnState();
+    });
+
+    // ─── Upload & Translate ─────────────────────────────────
+    translateBtn.addEventListener('click', async () => {
       if (!selectedFile || !targetLang.value) return;
 
       const formData = new FormData();
@@ -470,37 +658,171 @@
       formData.append('targetLang', targetLang.value);
       formData.append('model', modelSelect.value);
 
-      submitBtn.disabled = true;
-      submitBtn.textContent = '⏳ Uploading…';
+      uploadBtn.disabled = true;
+      translateBtn.disabled = true;
+      translateBtn.textContent = '⏳ Starting…';
 
       try {
         const res = await fetch('/api/translate', { method: 'POST', body: formData });
         const data = await res.json();
 
         if (res.ok) {
-          // Reset form
-          selectedFile = null;
-          fileInput.value = '';
-          fileInfo.classList.remove('visible');
-          targetLang.value = '';
-          submitBtn.textContent = '🚀 Start Translation';
-          updateSubmitState();
-
-          // Subscribe to job updates
+          resetForm();
+          switchTab('library');
           if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'subscribe', jobId: data.jobId }));
           }
         } else {
-          alert(data.error || 'Upload failed');
-          submitBtn.textContent = '🚀 Start Translation';
-          updateSubmitState();
+          alert(data.error || 'Failed to start translation');
         }
       } catch (err) {
-        alert('Upload error: ' + err.message);
-        submitBtn.textContent = '🚀 Start Translation';
-        updateSubmitState();
+        alert('Error: ' + err.message);
       }
+      translateBtn.textContent = '🚀 Upload & Translate';
+      updateBtnState();
     });
+
+    function resetForm() {
+      selectedFile = null;
+      fileInput.value = '';
+      fileInfo.classList.remove('visible');
+      translateOptions.style.display = 'none';
+      modelRow.style.display = 'none';
+      targetLang.value = '';
+    }
+
+    // ─── Books / Library ────────────────────────────────────
+    async function loadBooks() {
+      try {
+        const res = await fetch('/api/books');
+        if (!res.ok) return;
+        const data = await res.json();
+        const books = data.books || [];
+
+        document.getElementById('bookCount').textContent = `${books.length} book(s)`;
+
+        if (books.length === 0) {
+          bookEmpty.style.display = '';
+          return;
+        }
+        bookEmpty.style.display = 'none';
+
+        bookList.querySelectorAll('.book-card').forEach(el => el.remove());
+
+        books.forEach(book => renderBookCard(book));
+      } catch {}
+    }
+
+    function renderBookCard(book) {
+      let el = document.getElementById('book-' + book.id);
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'book-' + book.id;
+        bookList.prepend(el);
+      }
+
+      const total = book.totalBlocks || 0;
+      const translated = book.translatedBlocks || 0;
+      const pct = total > 0 ? Math.round((translated / total) * 100) : 0;
+      const isComplete = book.completedAt !== null;
+      const isTranslating = translated > 0 && !isComplete;
+
+      let statusBadge = '';
+      if (isComplete) {
+        statusBadge = '<span class="status-badge completed">✓ done</span>';
+      } else if (isTranslating) {
+        statusBadge = '<span class="status-badge translating">translating</span>';
+      } else {
+        statusBadge = '<span class="status-badge queued">parsed</span>';
+      }
+
+      let actions = '';
+      if (!isComplete) {
+        actions += `<button class="btn-sm btn-translate" onclick="openTranslateModal('${book.id}', '${escapeAttr(book.title)}', '${escapeAttr(book.author)}')">🌐 Translate</button>`;
+      }
+      actions += `<button class="btn-sm btn-delete" onclick="deleteBook('${book.id}')">✕</button>`;
+
+      const progressBar = translated > 0 ? `
+        <div class="progress-bar">
+          <div class="fill ${isComplete ? 'completed' : ''}" style="width:${pct}%"></div>
+        </div>` : '';
+
+      el.className = `book-card ${isComplete ? 'completed' : isTranslating ? 'translating' : ''}`;
+      el.innerHTML = `
+        <div class="book-top">
+          <div class="book-title">${escapeHtml(book.title || book.filename)}</div>
+          ${statusBadge}
+        </div>
+        <div class="book-author">${escapeHtml(book.author || 'Unknown author')}</div>
+        ${progressBar}
+        <div class="book-stats">
+          <span>📄 ${total} blocks</span>
+          <span>✅ ${translated} translated</span>
+          <span>🌍 ${book.language || '?'}</span>
+          ${book.targetLang ? `<span>→ ${book.targetLang}</span>` : ''}
+        </div>
+        <div class="book-actions">${actions}</div>
+      `;
+    }
+
+    // ─── Translate Modal ────────────────────────────────────
+    window.openTranslateModal = function(bookId, title, author) {
+      currentBookId = bookId;
+      document.getElementById('modalBookInfo').textContent = `${title} by ${author}`;
+      document.getElementById('translateModal').classList.add('visible');
+      document.getElementById('modalTargetLang').value = '';
+      updateModalBtn();
+    };
+
+    window.closeModal = function() {
+      document.getElementById('translateModal').classList.remove('visible');
+      currentBookId = null;
+    };
+
+    document.getElementById('modalTargetLang').addEventListener('change', updateModalBtn);
+
+    function updateModalBtn() {
+      const btn = document.getElementById('modalTranslateBtn');
+      const sel = document.getElementById('modalModel');
+      btn.disabled = !document.getElementById('modalTargetLang').value || (sel.options.length > 0 && !sel.value);
+    }
+
+    window.startTranslateFromModal = async function() {
+      if (!currentBookId) return;
+      const tLang = document.getElementById('modalTargetLang').value;
+      const sLang = document.getElementById('modalSourceLang').value;
+      const model = document.getElementById('modalModel').value;
+
+      try {
+        const res = await fetch(`/api/books/${currentBookId}/translate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetLang: tLang, sourceLang: sLang, model }),
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+          closeModal();
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'subscribe', jobId: data.jobId }));
+          }
+          loadBooks();
+        } else {
+          alert(data.error || 'Failed to start translation');
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+    };
+
+    window.deleteBook = async function(id) {
+      if (!confirm('Delete this book and all its data?')) return;
+      try {
+        await fetch(`/api/books/${id}`, { method: 'DELETE' });
+      } catch {}
+      const el = document.getElementById('book-' + id);
+      if (el) el.remove();
+    };
 
     // ─── WebSocket ───────────────────────────────────────────
     function connectWS() {
@@ -514,10 +836,13 @@
       ws.addEventListener('message', (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'job:update') {
-          renderJob(msg.job);
+          // Refresh book list on any job update
+          if (document.getElementById('libraryTab').style.display !== 'none') {
+            loadBooks();
+          }
         }
         if (msg.type === 'jobs:list') {
-          msg.jobs.forEach(renderJob);
+          // Initial jobs list — not used in new UI
         }
       });
 
@@ -527,73 +852,15 @@
     }
     connectWS();
 
-    // ─── Job rendering ──────────────────────────────────────
-    const jobs = {};
-
-    function renderJob(job) {
-      jobs[job.id] = job;
-
-      let el = document.getElementById('job-' + job.id);
-      if (!el) {
-        el = document.createElement('div');
-        el.id = 'job-' + job.id;
-        el.className = 'job-card ' + job.status;
-        jobList.prepend(el);
-        emptyState.style.display = 'none';
-      }
-
-      el.className = 'job-card ' + job.status;
-
-      const progressClass = job.status === 'completed' ? 'completed' : job.status === 'failed' ? 'failed' : '';
-      const downloadBtn = job.status === 'completed'
-        ? `<button class="btn-sm btn-download" onclick="downloadJob('${job.id}')">⬇ Download</button>`
-        : '';
-      const deleteBtn = (job.status === 'completed' || job.status === 'failed')
-        ? `<button class="btn-sm btn-delete" onclick="deleteJob('${job.id}')">✕</button>`
-        : '';
-
-      const meta = job.metadata
-        ? `<span style="color:var(--text2);font-size:11px;margin-right:8px">${job.metadata.title} · ${job.metadata.author}</span>`
-        : '';
-
-      el.innerHTML = `
-        <div class="job-top">
-          <div class="job-name">${escapeHtml(job.originalFilename)}</div>
-          <span class="status-badge ${job.status}">${job.status}</span>
-        </div>
-        <div class="progress-bar">
-          <div class="fill ${progressClass}" style="width:${job.progress}%"></div>
-        </div>
-        <div class="job-meta">
-          <div class="job-message">${meta}${escapeHtml(job.message)}</div>
-          <div class="job-actions">
-            ${downloadBtn}
-            ${deleteBtn}
-          </div>
-        </div>
-      `;
-    }
-
+    // ─── Helpers ────────────────────────────────────────────
     function escapeHtml(str) {
       const div = document.createElement('div');
       div.textContent = str || '';
       return div.innerHTML;
     }
-
-    // ─── Actions ─────────────────────────────────────────────
-    window.downloadJob = function(id) {
-      window.location.href = `/api/jobs/${id}/download`;
-    };
-
-    window.deleteJob = async function(id) {
-      await fetch(`/api/jobs/${id}`, { method: 'DELETE' });
-      const el = document.getElementById('job-' + id);
-      if (el) el.remove();
-      delete jobs[id];
-      if (Object.keys(jobs).length === 0) {
-        emptyState.style.display = '';
-      }
-    };
+    function escapeAttr(str) {
+      return (str || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    }
   </script>
 </body>
 </html>

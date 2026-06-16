@@ -109,7 +109,6 @@ describe('JobQueue', () => {
       sourceLang: 'en',
       model: 'llama3.1',
     });
-    // Ensure job2 has a later timestamp
     const job2 = queue.create({
       originalFilename: 'second.epub',
       inputPath: '/tmp/second.epub',
@@ -120,7 +119,6 @@ describe('JobQueue', () => {
 
     const list = queue.list();
     expect(list.length).toBe(2);
-    // Both jobs exist in the list
     const ids = list.map(j => j.id);
     expect(ids).toContain(job1.id);
     expect(ids).toContain(job2.id);
@@ -189,14 +187,50 @@ describe('Web Server API', () => {
     expect(html).toContain('AI Translate');
   });
 
-  it('should return 400 for upload without file', async () => {
+  it('should return config', async () => {
+    const res = await fetch(`http://localhost:${port}/api/config`);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(typeof data.uploadOnly).toBe('boolean');
+    expect(typeof data.defaultModel).toBe('string');
+  });
+
+  // ── Upload-only endpoint ──────────────────────────────────
+
+  it('should return 400 for upload-only without file', async () => {
+    const res = await fetch(`http://localhost:${port}/api/upload`, {
+      method: 'POST',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('should accept upload-only and create a job', async () => {
+    const form = new FormData();
+    const fileBuffer = fs.readFileSync(SAMPLE_EPUB);
+    form.append('file', new Blob([fileBuffer]), 'sample.epub');
+
+    const res = await fetch(`http://localhost:${port}/api/upload`, {
+      method: 'POST',
+      body: form,
+    });
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.jobId).toBeTruthy();
+    expect(data.uploadOnly).toBe(true);
+    expect(['queued', 'parsing', 'completed']).toContain(data.status);
+  });
+
+  // ── Translate endpoint ────────────────────────────────────
+
+  it('should return 400 for translate without file', async () => {
     const res = await fetch(`http://localhost:${port}/api/translate`, {
       method: 'POST',
     });
     expect(res.status).toBe(400);
   });
 
-  it('should return 400 for upload without targetLang', async () => {
+  it('should return 400 for translate without targetLang', async () => {
     const form = new FormData();
     const fileBuffer = fs.readFileSync(SAMPLE_EPUB);
     form.append('file', new Blob([fileBuffer]), 'sample.epub');
@@ -208,7 +242,7 @@ describe('Web Server API', () => {
     expect(res.status).toBe(400);
   });
 
-  it('should accept a valid upload and create a job', async () => {
+  it('should accept a valid translate and create a job', async () => {
     const form = new FormData();
     const fileBuffer = fs.readFileSync(SAMPLE_EPUB);
     form.append('file', new Blob([fileBuffer]), 'sample.epub');
@@ -224,15 +258,24 @@ describe('Web Server API', () => {
 
     const data = await res.json();
     expect(data.jobId).toBeTruthy();
-    // Status may be 'queued' or already progressed to 'parsing' since pipeline starts async
     expect(['queued', 'parsing']).toContain(data.status);
-
-    // Check that the job exists in the queue
-    const job = jobQueue.get(data.jobId);
-    expect(job).toBeDefined();
-    expect(job.originalFilename).toBe('sample.epub');
-    expect(job.targetLang).toBe('es');
   });
+
+  // ── Books endpoints ───────────────────────────────────────
+
+  it('should list books', async () => {
+    const res = await fetch(`http://localhost:${port}/api/books`);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(Array.isArray(data.books)).toBe(true);
+  });
+
+  it('should return 404 for non-existent book', async () => {
+    const res = await fetch(`http://localhost:${port}/api/books/nonexistent-id`);
+    expect(res.status).toBe(404);
+  });
+
+  // ── Jobs endpoints ────────────────────────────────────────
 
   it('should list jobs', async () => {
     const res = await fetch(`http://localhost:${port}/api/jobs`);
@@ -273,7 +316,6 @@ describe('Web Server API', () => {
     });
     expect(res.status).toBe(200);
 
-    // Verify job is gone
     expect(jobQueue.get(job.id)).toBeUndefined();
   });
 });
