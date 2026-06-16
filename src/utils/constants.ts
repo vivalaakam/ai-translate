@@ -6,6 +6,7 @@ export const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'llama3.1';
 export const DEFAULT_API_KEY = process.env.OPENAI_API_KEY || '';
 export const DEFAULT_CHUNK_SIZE = parseInt(process.env.CHUNK_SIZE || '8000', 10); // chars per translation chunk
 export const DEFAULT_PORT = parseInt(process.env.PORT || '3000', 10);
+export const DEFAULT_LLM_PROVIDER = process.env.LLM_PROVIDER || '';
 export const TEMP_MARKER_PREFIX = 'ai-tr';
 export const SUPPORTED_INPUT_FORMATS: string[] = ['.epub', '.fb2'];
 

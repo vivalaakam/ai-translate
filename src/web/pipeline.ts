@@ -10,6 +10,7 @@ import { extractAllBlocks } from '../parsers/block-extractor.js';
 import { assembleDocHtml } from '../parsers/block-assembler.js';
 import { JobQueue as JQStatic } from '../web/job-queue.js';
 import { JobQueue } from '../web/job-queue.js';
+import { parseProvider, ensureModelLoaded, unloadIfWeLoaded } from '../translators/model-manager.js';
 import type { TranslationJob } from '../types.js';
 
 /**
@@ -20,19 +21,34 @@ import type { TranslationJob } from '../types.js';
  * 3. Translate each untranslated block individually
  * 4. Assemble translated blocks back into EPUB
  *
+ * For LM Studio: auto-loads the model before translation,
+ * and unloads it after (if it wasn't already loaded).
+ *
  * Updates the job status in the queue as it progresses.
  */
 export async function runTranslation(
   job: TranslationJob,
   jobQueue: JobQueue,
-  options?: { ollamaUrl?: string; apiKey?: string; dbPath?: string },
+  options?: { ollamaUrl?: string; apiKey?: string; dbPath?: string; provider?: string },
 ): Promise<void> {
   const ollamaUrl = options?.ollamaUrl || 'http://localhost:11434';
   const apiKey = options?.apiKey || '';
+  const provider = parseProvider(options?.provider);
   const outputDir = JQStatic.getOutputDir();
   const db = new TranslateDb(options?.dbPath);
+  let modelLoadedByUs = false;
 
   try {
+    // ── Step 0: Load model (LM Studio) ──────────────────────
+    if (provider === 'lmstudio') {
+      jobQueue.updateStatus(job.id, 'parsing', `Loading model "${job.model}" in LM Studio...`, 2);
+      modelLoadedByUs = ensureModelLoaded(job.model, provider);
+      const statusMsg = modelLoadedByUs
+        ? `Model "${job.model}" loaded into LM Studio`
+        : `Model "${job.model}" already loaded in LM Studio`;
+      jobQueue.updateStatus(job.id, 'parsing', statusMsg, 4);
+    }
+
     // ── Step 1: Parse ──────────────────────────────────────────
     jobQueue.updateStatus(job.id, 'parsing', 'Parsing file...', 5);
 
@@ -159,5 +175,13 @@ export async function runTranslation(
     jobQueue.updateStatus(job.id, 'failed', `Failed: ${err.message}`, 0);
   } finally {
     db.close();
+    // Unload model if we loaded it (LM Studio)
+    if (modelLoadedByUs) {
+      try {
+        unloadIfWeLoaded(job.model, modelLoadedByUs, provider);
+      } catch {
+        // Best-effort — don't fail the job on unload failure
+      }
+    }
   }
 }

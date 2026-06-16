@@ -7,7 +7,7 @@ import fs from 'fs';
 
 import { JobQueue } from './job-queue.js';
 import { runTranslation } from './pipeline.js';
-import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_PORT, DEFAULT_API_KEY } from '../utils/constants.js';
+import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER } from '../utils/constants.js';
 import type { TranslationJob } from '../types.js';
 
 // Storage config
@@ -43,7 +43,7 @@ const wsClients: Set<WSClient> = new Set();
 /**
  * Create and configure the Express app + WebSocket server.
  */
-export function createApp(options?: { ollamaUrl?: string; defaultModel?: string; apiKey?: string }): {
+export function createApp(options?: { ollamaUrl?: string; defaultModel?: string; apiKey?: string; provider?: string }): {
   app: express.Application;
   server: http.Server;
   jobQueue: JobQueue;
@@ -53,6 +53,7 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
   const ollamaUrl = options?.ollamaUrl || OLLAMA_DEFAULT_URL;
   const defaultModel = options?.defaultModel || DEFAULT_MODEL;
   const apiKey = options?.apiKey || DEFAULT_API_KEY;
+  const provider = options?.provider || DEFAULT_LLM_PROVIDER;
 
   // Job queue with WebSocket broadcast
   const jobQueue = new JobQueue((job) => {
@@ -136,7 +137,7 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
       });
 
       // Start translation in background
-      runTranslation(job, jobQueue, { ollamaUrl, apiKey }).catch(() => {
+      runTranslation(job, jobQueue, { ollamaUrl, apiKey, provider }).catch(() => {
         // Error is already handled inside runTranslation
       });
 
@@ -223,7 +224,7 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
 /**
  * Start the web server.
  */
-export function startServer(port: number = DEFAULT_PORT, options?: { ollamaUrl?: string; defaultModel?: string; apiKey?: string }): http.Server {
+export function startServer(port: number = DEFAULT_PORT, options?: { ollamaUrl?: string; defaultModel?: string; apiKey?: string; provider?: string }): http.Server {
   const { server, jobQueue } = createApp(options);
 
   server.listen(port, () => {

@@ -12,9 +12,10 @@ import { OllamaClient } from '../translators/ollama-client.js';
 import { TranslateDb, generateBookId } from '../db/database.js';
 import { extractAllBlocks } from '../parsers/block-extractor.js';
 import { assembleDocHtml } from '../parsers/block-assembler.js';
-import { SUPPORTED_INPUT_FORMATS, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_CHUNK_SIZE, DEFAULT_PORT, DEFAULT_API_KEY } from '../utils/constants.js';
+import { SUPPORTED_INPUT_FORMATS, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_CHUNK_SIZE, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER } from '../utils/constants.js';
 import { formatProgress, formatStats } from './progress.js';
 import { startServer } from '../web/server.js';
+import { parseProvider, ensureModelLoaded, unloadIfWeLoaded } from '../translators/model-manager.js';
 import type { ParsedEpub, Block } from '../types.js';
 
 /**
@@ -43,6 +44,12 @@ function generateOutputPath(inputPath: string, targetLang: string): string {
 async function translateCommand(inputFile: string, options: Record<string, any>): Promise<void> {
   const spinner = ora();
 
+  // Declare variables needed in finally block
+  const model: string = options.model || DEFAULT_MODEL;
+  const providerStr: string = options.provider || DEFAULT_LLM_PROVIDER;
+  const provider = parseProvider(providerStr);
+  let modelLoadedByUs = false;
+
   try {
     // Validate input file
     if (!fs.existsSync(inputFile)) {
@@ -64,7 +71,6 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
 
     const targetLang: string = options.lang;
     const sourceLang: string = options.source || 'auto';
-    const model: string = options.model || DEFAULT_MODEL;
     const url: string = options.url || OLLAMA_DEFAULT_URL;
     const apiKey: string = options.apiKey || DEFAULT_API_KEY;
     const outputPath: string = options.output || generateOutputPath(inputFile, targetLang);
@@ -101,6 +107,17 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
       process.exit(1);
     }
     spinner.succeed('API is available');
+
+    // Load model if using LM Studio and it's not already loaded
+    if (provider === 'lmstudio') {
+      spinner.start(`Checking if model "${model}" is loaded in LM Studio...`);
+      modelLoadedByUs = ensureModelLoaded(model, provider);
+      if (modelLoadedByUs) {
+        spinner.succeed(`Model "${model}" loaded into LM Studio`);
+      } else {
+        spinner.succeed(`Model "${model}" already loaded in LM Studio`);
+      }
+    }
 
     // Parse input file
     spinner.start(`Parsing ${format.toUpperCase()} file...`);
@@ -230,6 +247,17 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
       console.error(chalk.gray(err.stack));
     }
     process.exit(1);
+  } finally {
+    // Unload model if we loaded it (LM Studio)
+    if (modelLoadedByUs) {
+      const unloadSpinner = ora(`Unloading model "${model}" from LM Studio...`).start();
+      try {
+        unloadIfWeLoaded(model, modelLoadedByUs, provider);
+        unloadSpinner.succeed(`Model "${model}" unloaded from LM Studio`);
+      } catch {
+        unloadSpinner.warn(`Failed to unload model "${model}" — you may need to unload manually: lms unload ${model}`);
+      }
+    }
   }
 }
 
@@ -241,6 +269,7 @@ async function webCommand(options: Record<string, any>): Promise<void> {
   const url = options.url || OLLAMA_DEFAULT_URL;
   const model = options.model || DEFAULT_MODEL;
   const apiKey = options.apiKey || DEFAULT_API_KEY;
+  const providerStr = options.provider || DEFAULT_LLM_PROVIDER;
 
   console.log(chalk.cyan('\n🌐 Starting ai-translate web server...\n'));
   console.log(chalk.white(`  Port:      ${port}`));
@@ -249,9 +278,12 @@ async function webCommand(options: Record<string, any>): Promise<void> {
   if (apiKey) {
     console.log(chalk.white(`  API key:   ****${apiKey.slice(-4)}`));
   }
+  if (providerStr) {
+    console.log(chalk.white(`  Provider:  ${providerStr}`));
+  }
   console.log();
 
-  startServer(port, { ollamaUrl: url, defaultModel: model, apiKey });
+  startServer(port, { ollamaUrl: url, defaultModel: model, apiKey, provider: providerStr });
 }
 
 /**
@@ -276,6 +308,7 @@ export function run(): void {
     .option('-m, --model <model>', 'Model name', DEFAULT_MODEL)
     .option('-u, --url <url>', 'API base URL', OLLAMA_DEFAULT_URL)
     .option('-k, --api-key <key>', 'API key (or set OPENAI_API_KEY env)', DEFAULT_API_KEY)
+    .option('--provider <type>', 'LLM provider: lmstudio, ollama, remote', DEFAULT_LLM_PROVIDER)
     .option('-f, --force', 'Overwrite output file if exists')
     .option('--dry-run', 'Show what would be translated without translating')
     .option('-v, --verbose', 'Verbose output')
@@ -289,6 +322,7 @@ export function run(): void {
     .option('-u, --url <url>', 'API base URL', OLLAMA_DEFAULT_URL)
     .option('-m, --model <model>', 'Default model', DEFAULT_MODEL)
     .option('-k, --api-key <key>', 'API key (or set OPENAI_API_KEY env)', DEFAULT_API_KEY)
+    .option('--provider <type>', 'LLM provider: lmstudio, ollama, remote', DEFAULT_LLM_PROVIDER)
     .action(webCommand);
 
   program.parse();
