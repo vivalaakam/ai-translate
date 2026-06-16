@@ -144,7 +144,7 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
     }
 
     const stat = fs.statSync(filePath);
-    res.setHeader('Content-Type', 'application/epub+zip');
+    res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Length', stat.size);
     res.setHeader('Content-Disposition', `attachment; filename="${req.params.filename}"`);
     const fileStream = fs.createReadStream(filePath);
