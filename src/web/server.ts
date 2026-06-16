@@ -143,9 +143,19 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
       return;
     }
 
+    const stat = fs.statSync(filePath);
     res.setHeader('Content-Type', 'application/epub+zip');
+    res.setHeader('Content-Length', stat.size);
     res.setHeader('Content-Disposition', `attachment; filename="${req.params.filename}"`);
     const fileStream = fs.createReadStream(filePath);
+    fileStream.on('error', (err) => {
+      console.error('Export stream error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Stream error' });
+      } else {
+        res.end();
+      }
+    });
     fileStream.pipe(res);
   });
 
