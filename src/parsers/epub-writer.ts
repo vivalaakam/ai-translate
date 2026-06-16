@@ -1,6 +1,7 @@
 import AdmZip from 'adm-zip';
 import fs from 'fs';
 import path from 'path';
+import type { ParsedEpub, UpdatedEntry } from '../types.js';
 
 /**
  * Write a parsed EPUB structure back to a valid EPUB file.
@@ -8,22 +9,26 @@ import path from 'path';
  * all other entries (CSS, images, fonts) are preserved byte-for-byte.
  */
 export class EpubWriter {
+  private metadata: ParsedEpub['metadata'];
+  private contentDocs: ParsedEpub['contentDocs'];
+  private zip: AdmZip;
+  private updatedEntries: UpdatedEntry[] = [];
+
   /**
-   * @param {object} parsedEpub - Output from EpubParser.parse()
+   * @param parsedEpub - Output from EpubParser.parse()
    */
-  constructor(parsedEpub) {
+  constructor(parsedEpub: ParsedEpub) {
     this.metadata = parsedEpub.metadata;
     this.contentDocs = parsedEpub.contentDocs;
-    this.zip = parsedEpub._zip;
-    this.updatedEntries = [];
+    this.zip = parsedEpub._zip as AdmZip;
   }
 
   /**
    * Update a content document's HTML.
-   * @param {string} contentPath - Path within the EPUB (e.g., "OEBPS/chapter1.xhtml")
-   * @param {string} newHtml - New HTML content
+   * @param contentPath - Path within the EPUB (e.g., "OEBPS/chapter1.xhtml")
+   * @param newHtml - New HTML content
    */
-  updateContentDoc(contentPath, newHtml) {
+  updateContentDoc(contentPath: string, newHtml: string): void {
     this.updatedEntries.push({
       path: contentPath,
       content: newHtml,
@@ -32,9 +37,9 @@ export class EpubWriter {
 
   /**
    * Write the EPUB to a file.
-   * @param {string} outputPath - Path to write the EPUB file
+   * @param outputPath - Path to write the EPUB file
    */
-  async write(outputPath) {
+  async write(outputPath: string): Promise<void> {
     // Ensure output directory exists
     const outputDir = path.dirname(outputPath);
     if (!fs.existsSync(outputDir)) {
@@ -45,7 +50,7 @@ export class EpubWriter {
     const newZip = new AdmZip();
 
     // Track which paths we've updated
-    const updatedPaths = new Map();
+    const updatedPaths = new Map<string, string>();
     for (const entry of this.updatedEntries) {
       updatedPaths.set(entry.path, entry.content);
     }

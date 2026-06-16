@@ -1,10 +1,13 @@
 import { DEFAULT_CHUNK_SIZE, TEMP_MARKER_PREFIX } from '../utils/constants.js';
+import type { HTMLElement } from 'node-html-parser';
+import type { OllamaClient } from './ollama-client.js';
+import type { TextNode, OrchestratorOptions, TranslateDocumentOptions, TranslationProgress } from '../types.js';
 
 // Tags whose content should NOT be translated
-const SKIP_TAGS = new Set(['script', 'style', 'head', 'meta', 'link', 'title']);
+const SKIP_TAGS: Set<string> = new Set(['script', 'style', 'head', 'meta', 'link', 'title']);
 
 // Tags that typically contain translatable text
-const TRANSLATABLE_TAGS = new Set([
+const TRANSLATABLE_TAGS: Set<string> = new Set([
   'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'li', 'td', 'th', 'caption', 'span', 'div',
   'blockquote', 'pre', 'em', 'strong', 'a',
@@ -21,12 +24,14 @@ let nodeIdCounter = 0;
  * 4. Replace text in original DOM
  */
 export class TranslationOrchestrator {
+  private client: OllamaClient;
+  private chunkSize: number;
+
   /**
-   * @param {OllamaClient} ollamaClient
-   * @param {object} [options]
-   * @param {number} [options.chunkSize] - Max chars per translation chunk
+   * @param ollamaClient - An OllamaClient instance
+   * @param options - Configuration options
    */
-  constructor(ollamaClient, options = {}) {
+  constructor(ollamaClient: OllamaClient, options: OrchestratorOptions = {}) {
     this.client = ollamaClient;
     this.chunkSize = options.chunkSize || DEFAULT_CHUNK_SIZE;
   }
@@ -34,34 +39,35 @@ export class TranslationOrchestrator {
   /**
    * Extract all translatable text nodes from a DOM.
    * Assigns a unique data-ai-tr-id attribute to each element containing text.
-   * @param {object} dom - node-html-parser DOM
-   * @returns {Array<{id: string, text: string, element: object}>}
+   * @param dom - node-html-parser DOM root
+   * @returns Array of text node info objects
    */
-  extractTextNodes(dom) {
+  extractTextNodes(dom: HTMLElement): TextNode[] {
     nodeIdCounter = 0;
-    const nodes = [];
+    const nodes: TextNode[] = [];
 
-    const walk = (element) => {
+    const walk = (element: unknown): void => {
       if (!element || typeof element === 'string') return;
 
-      const tagName = element.tagName?.toLowerCase();
+      const el = element as HTMLElement;
+      const tagName = el.tagName?.toLowerCase();
       if (tagName && SKIP_TAGS.has(tagName)) return;
 
       // Check if this element has direct text content worth translating
-      const directText = this._getDirectText(element);
+      const directText = this._getDirectText(el);
       if (directText && directText.trim()) {
         const id = `${TEMP_MARKER_PREFIX}${nodeIdCounter++}`;
-        element.setAttribute('data-ai-tr-id', id);
+        el.setAttribute('data-ai-tr-id', id);
         nodes.push({
           id,
           text: directText.trim(),
-          element,
+          element: el,
         });
       }
 
       // Recurse into children
-      if (element.childNodes) {
-        for (const child of element.childNodes) {
+      if (el.childNodes) {
+        for (const child of el.childNodes) {
           walk(child);
         }
       }
@@ -75,11 +81,11 @@ export class TranslationOrchestrator {
    * Get direct text content of an element (not including child elements' text).
    * @private
    */
-  _getDirectText(element) {
+  private _getDirectText(element: HTMLElement): string {
     let text = '';
     for (const child of (element.childNodes || [])) {
       if (child.nodeType === 3) { // Text node
-        text += child.rawText;
+        text += (child as any).rawText;
       }
     }
     return text;
@@ -87,15 +93,15 @@ export class TranslationOrchestrator {
 
   /**
    * Group text nodes into chunks for translation, respecting size limits.
-   * @param {Array} nodes - Output from extractTextNodes
-   * @param {number} [maxChars] - Maximum characters per chunk
-   * @returns {Array<Array>} - Groups of text nodes
+   * @param nodes - Output from extractTextNodes
+   * @param maxChars - Maximum characters per chunk
+   * @returns Groups of text nodes
    */
-  groupIntoChunks(nodes, maxChars = this.chunkSize) {
+  groupIntoChunks(nodes: TextNode[], maxChars: number = this.chunkSize): TextNode[][] {
     if (!nodes.length) return [];
 
-    const chunks = [];
-    let currentChunk = [];
+    const chunks: TextNode[][] = [];
+    let currentChunk: TextNode[] = [];
     let currentSize = 0;
 
     for (const node of nodes) {
@@ -120,11 +126,11 @@ export class TranslationOrchestrator {
 
   /**
    * Replace text in DOM nodes based on translations map.
-   * @param {object} dom - node-html-parser DOM
-   * @param {Array} nodes - Text nodes from extractTextNodes
-   * @param {object} translations - Map of id → translated text
+   * @param dom - node-html-parser DOM root
+   * @param nodes - Text nodes from extractTextNodes
+   * @param translations - Map of id → translated text
    */
-  replaceText(dom, nodes, translations) {
+  replaceText(dom: HTMLElement, nodes: TextNode[], translations: Record<string, string>): void {
     for (const node of nodes) {
       const translated = translations[node.id];
       if (translated === undefined) continue;
@@ -142,17 +148,17 @@ export class TranslationOrchestrator {
    * Replace direct text content of an element while preserving child elements.
    * @private
    */
-  _replaceDirectText(element, originalText, translatedText) {
+  private _replaceDirectText(element: HTMLElement, originalText: string, translatedText: string): void {
     // Find and replace text nodes directly
     for (const child of (element.childNodes || [])) {
       if (child.nodeType === 3) { // Text node
         const trimmedOriginal = originalText.trim();
-        const trimmedChild = child.rawText.trim();
+        const trimmedChild = (child as any).rawText.trim();
 
         if (trimmedChild && trimmedOriginal.includes(trimmedChild)) {
           // Calculate the replacement for this text node
           const translated = translatedText;
-          child.rawText = child.rawText.replace(trimmedChild, translated);
+          (child as any).rawText = (child as any).rawText.replace(trimmedChild, translated);
           return;
         }
       }
@@ -164,15 +170,15 @@ export class TranslationOrchestrator {
     const textNodes = children.filter(c => c.nodeType === 3);
     if (textNodes.length === 1 && children.filter(c => c.nodeType !== 3).length === 0) {
       // Simple case: element has only one text node
-      textNodes[0].rawText = translatedText;
+      (textNodes[0] as any).rawText = translatedText;
     }
   }
 
   /**
    * Clean up temporary attributes from the DOM.
-   * @param {object} dom - node-html-parser DOM
+   * @param dom - node-html-parser DOM root
    */
-  cleanupMarkers(dom) {
+  cleanupMarkers(dom: HTMLElement): void {
     const marked = dom.querySelectorAll(`[data-ai-tr-id]`);
     for (const el of marked) {
       el.removeAttribute('data-ai-tr-id');
@@ -181,14 +187,10 @@ export class TranslationOrchestrator {
 
   /**
    * Translate all text in a content document.
-   * @param {object} dom - node-html-parser DOM
-   * @param {object} options
-   * @param {string} options.sourceLang - Source language
-   * @param {string} options.targetLang - Target language
-   * @param {Function} [options.onProgress] - Progress callback
-   * @returns {Promise<void>}
+   * @param dom - node-html-parser DOM root
+   * @param options - Translation options
    */
-  async translateDocument(dom, { sourceLang, targetLang, onProgress } = {}) {
+  async translateDocument(dom: HTMLElement, { sourceLang, targetLang, onProgress }: TranslateDocumentOptions): Promise<void> {
     // 1. Extract text nodes
     const nodes = this.extractTextNodes(dom);
     if (nodes.length === 0) return;
@@ -198,7 +200,7 @@ export class TranslationOrchestrator {
     if (chunks.length === 0) return;
 
     // 3. Translate each chunk
-    const translations = {};
+    const translations: Record<string, string> = {};
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const text = chunk.map(n => `[${n.id}] ${n.text}`).join('\n\n');
@@ -230,11 +232,11 @@ export class TranslationOrchestrator {
 
   /**
    * Parse translation response to extract individual translated segments.
-   * Expected format: [t0] Translated text
+   * Expected format: [tN] Translated text
    * @private
    */
-  _parseTranslations(translatedText, translations) {
-    // Try to match [tN] markers
+  private _parseTranslations(translatedText: string, translations: Record<string, string>): void {
+    // Try to match [ai-trN] markers
     const markerRegex = new RegExp(`\\[${TEMP_MARKER_PREFIX}\\d+\\]`, 'g');
     const markers = [...translatedText.matchAll(markerRegex)];
 
@@ -249,8 +251,8 @@ export class TranslationOrchestrator {
       if (!idMatch) continue;
 
       const id = idMatch[1];
-      const start = marker.index + marker[0].length;
-      const end = i + 1 < markers.length ? markers[i + 1].index : translatedText.length;
+      const start = (marker.index ?? 0) + marker[0].length;
+      const end = i + 1 < markers.length ? (markers[i + 1].index ?? translatedText.length) : translatedText.length;
       const text = translatedText.slice(start, end).trim();
 
       if (text) {

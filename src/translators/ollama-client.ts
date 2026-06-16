@@ -1,4 +1,5 @@
 import { DEFAULT_CHUNK_SIZE, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, TRANSLATION_PROMPT_TEMPLATE } from '../utils/constants.js';
+import type { OllamaClientOptions, TranslateOptions } from '../types.js';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
@@ -8,12 +9,14 @@ const REQUEST_TIMEOUT_MS = 300000; // 5 minutes per chunk
  * Client for communicating with Ollama's REST API for translation.
  */
 export class OllamaClient {
+  private baseUrl: string;
+  private model: string;
+  private _fetch: typeof globalThis.fetch;
+
   /**
-   * @param {object} options
-   * @param {string} [options.baseUrl] - Ollama API base URL
-   * @param {string} [options.model] - Model name to use
+   * @param options - Configuration options
    */
-  constructor({ baseUrl = OLLAMA_DEFAULT_URL, model = DEFAULT_MODEL } = {}) {
+  constructor({ baseUrl = OLLAMA_DEFAULT_URL, model = DEFAULT_MODEL }: OllamaClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, ''); // remove trailing slash
     this.model = model;
     this._fetch = globalThis.fetch;
@@ -21,9 +24,8 @@ export class OllamaClient {
 
   /**
    * Check if Ollama is available.
-   * @returns {Promise<boolean>}
    */
-  async checkAvailable() {
+  async checkAvailable(): Promise<boolean> {
     try {
       const response = await this._fetch(`${this.baseUrl}/api/tags`);
       return response.ok;
@@ -34,13 +36,11 @@ export class OllamaClient {
 
   /**
    * Build the translation prompt.
-   * @param {string} text - Text to translate
-   * @param {object} options
-   * @param {string} options.sourceLang - Source language
-   * @param {string} options.targetLang - Target language
-   * @returns {string}
+   * @param text - Text to translate
+   * @param options - Language options
+   * @returns The formatted prompt string
    */
-  buildPrompt(text, { sourceLang, targetLang }) {
+  buildPrompt(text: string, { sourceLang, targetLang }: { sourceLang: string; targetLang: string }): string {
     return TRANSLATION_PROMPT_TEMPLATE
       .replace('{sourceLang}', sourceLang)
       .replace('{targetLang}', targetLang)
@@ -49,24 +49,20 @@ export class OllamaClient {
 
   /**
    * Translate text using Ollama.
-   * @param {string} text - Text to translate
-   * @param {object} options
-   * @param {string} options.sourceLang - Source language
-   * @param {string} options.targetLang - Target language
-   * @param {Function} [options.onProgress] - Progress callback
-   * @param {number} [options.maxRetries] - Max retry attempts
-   * @returns {Promise<string>} - Translated text
+   * @param text - Text to translate
+   * @param options - Translation options
+   * @returns Translated text
    */
-  async translate(text, { sourceLang, targetLang, onProgress, maxRetries = MAX_RETRIES } = {}) {
+  async translate(text: string, { sourceLang, targetLang, onProgress, maxRetries = MAX_RETRIES }: TranslateOptions): Promise<string> {
     const prompt = this.buildPrompt(text, { sourceLang, targetLang });
 
-    let lastError;
+    let lastError: Error = new Error('Unknown error');
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const result = await this._callApi(prompt, onProgress);
+        const result = await this._callApi(prompt, onProgress as ((text: string) => void) | undefined);
         return result;
       } catch (error) {
-        lastError = error;
+        lastError = error as Error;
         if (attempt < maxRetries) {
           await this._delay(RETRY_DELAY_MS * attempt);
         }
@@ -77,16 +73,16 @@ export class OllamaClient {
 
   /**
    * Split text into chunks respecting paragraph boundaries.
-   * @param {string} text - Text to split
-   * @param {number} [maxChars] - Maximum characters per chunk
-   * @returns {string[]}
+   * @param text - Text to split
+   * @param maxChars - Maximum characters per chunk
+   * @returns Array of text chunks
    */
-  splitIntoChunks(text, maxChars = DEFAULT_CHUNK_SIZE) {
+  splitIntoChunks(text: string, maxChars: number = DEFAULT_CHUNK_SIZE): string[] {
     if (!text || !text.trim()) return [];
 
     // Split by double newlines (paragraph boundaries)
     const paragraphs = text.split(/\n\n+/);
-    const chunks = [];
+    const chunks: string[] = [];
     let currentChunk = '';
 
     for (const paragraph of paragraphs) {
@@ -130,7 +126,7 @@ export class OllamaClient {
    * Call the Ollama API.
    * @private
    */
-  async _callApi(prompt, onProgress) {
+  private async _callApi(prompt: string, onProgress?: (text: string) => void): Promise<string> {
     const response = await this._fetch(`${this.baseUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -157,7 +153,7 @@ export class OllamaClient {
    * Process a streaming response from Ollama.
    * @private
    */
-  async _processStreamResponse(response, onProgress) {
+  private async _processStreamResponse(response: Response, onProgress?: (text: string) => void): Promise<string> {
     let fullText = '';
 
     if (!response.body) {
@@ -177,7 +173,7 @@ export class OllamaClient {
         for (const line of chunk.split('\n')) {
           if (!line.trim()) continue;
           try {
-            const json = JSON.parse(line);
+            const json = JSON.parse(line) as { response?: string };
             if (json.response) {
               fullText += json.response;
               if (onProgress) {
@@ -200,7 +196,7 @@ export class OllamaClient {
    * Delay helper for retries.
    * @private
    */
-  async _delay(ms) {
+  private _delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 }

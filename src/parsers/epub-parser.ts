@@ -2,6 +2,7 @@ import AdmZip from 'adm-zip';
 import { parse as parseHtml } from 'node-html-parser';
 import { XMLParser } from 'fast-xml-parser';
 import path from 'path';
+import type { BookMetadata, ContentDoc, ManifestItem, ParsedEpub } from '../types.js';
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -14,24 +15,25 @@ const xmlParser = new XMLParser({
  * EPUB is a ZIP archive containing XHTML files referenced by a spine in content.opf.
  */
 export class EpubParser {
+  private filePath: string;
+  private zip: AdmZip | null = null;
+  private metadata: BookMetadata | null = null;
+  private contentDocs: ContentDoc[] = [];
+  private contentOpfPath: string | null = null;
+  private manifest: Record<string, ManifestItem> = {};
+  private spine: string[] = [];
+
   /**
-   * @param {string} filePath - Path to the .epub file
+   * @param filePath - Path to the .epub file
    */
-  constructor(filePath) {
+  constructor(filePath: string) {
     this.filePath = filePath;
-    this.zip = null;
-    this.metadata = null;
-    this.contentDocs = [];
-    this.contentOpfPath = null;
-    this.manifest = {};
-    this.spine = [];
   }
 
   /**
    * Parse the EPUB and extract all content documents.
-   * @returns {Promise<{metadata: object, contentDocs: Array<{path: string, dom: object, rawContent: string}>}>}
    */
-  async parse() {
+  async parse(): Promise<ParsedEpub> {
     this.zip = new AdmZip(this.filePath);
 
     // 1. Find content.opf path from container.xml
@@ -44,7 +46,7 @@ export class EpubParser {
     this.contentDocs = this._extractContentDocs();
 
     return {
-      metadata: this.metadata,
+      metadata: this.metadata!,
       contentDocs: this.contentDocs,
       _zip: this.zip,
     };
@@ -52,31 +54,28 @@ export class EpubParser {
 
   /**
    * Get ordered list of XHTML file paths from the spine.
-   * @returns {Promise<string[]>}
    */
-  async getContentDocPaths() {
+  async getContentDocPaths(): Promise<string[]> {
     if (!this.contentOpfPath) {
       await this.parse();
     }
-    return this.spine.map(id => this.manifest[id]?.href).filter(Boolean);
+    return this.spine.map(id => this.manifest[id]?.href).filter(Boolean) as string[];
   }
 
   /**
    * Get metadata from the EPUB.
-   * @returns {Promise<{title: string, author: string, language: string}>}
    */
-  async getMetadata() {
+  async getMetadata(): Promise<BookMetadata> {
     if (!this.metadata) {
       await this.parse();
     }
-    return this.metadata;
+    return this.metadata!;
   }
 
   /**
    * Get the raw zip for writing back.
-   * @returns {AdmZip}
    */
-  getZip() {
+  getZip(): AdmZip | null {
     return this.zip;
   }
 
@@ -84,17 +83,17 @@ export class EpubParser {
    * Find the path to content.opf from META-INF/container.xml
    * @private
    */
-  _findContentOpfPath() {
-    const containerEntry = this.zip.getEntry('META-INF/container.xml');
+  private _findContentOpfPath(): string {
+    const containerEntry = this.zip!.getEntry('META-INF/container.xml');
     if (!containerEntry) {
       throw new Error('Invalid EPUB: missing META-INF/container.xml');
     }
 
     const containerXml = containerEntry.getData().toString('utf8');
-    const parsed = xmlParser.parse(containerXml);
+    const parsed = xmlParser.parse(containerXml) as Record<string, any>;
 
     // Navigate to rootfile full-path
-    let opfPath = null;
+    let opfPath: string | null = null;
     try {
       const container = parsed.container;
       const rootfiles = container.rootfiles?.rootfile || container.rootfiles?.[0]?.rootfile;
@@ -123,14 +122,14 @@ export class EpubParser {
    * Parse content.opf for metadata, manifest, and spine.
    * @private
    */
-  _parseContentOpf() {
-    const opfEntry = this.zip.getEntry(this.contentOpfPath);
+  private _parseContentOpf(): void {
+    const opfEntry = this.zip!.getEntry(this.contentOpfPath!);
     if (!opfEntry) {
       throw new Error(`Invalid EPUB: missing ${this.contentOpfPath}`);
     }
 
     const opfXml = opfEntry.getData().toString('utf8');
-    const parsed = xmlParser.parse(opfXml);
+    const parsed = xmlParser.parse(opfXml) as Record<string, any>;
 
     const pkg = parsed.package;
 
@@ -170,7 +169,7 @@ export class EpubParser {
     // Extract spine
     const spineItems = pkg?.spine?.itemref || [];
     const refs = Array.isArray(spineItems) ? spineItems : [spineItems];
-    this.spine = refs.map(item => item?.['@_idref']).filter(Boolean);
+    this.spine = refs.map((item: any) => item?.['@_idref']).filter(Boolean);
 
     // If spine is empty, use all XHTML items from manifest
     if (this.spine.length === 0) {
@@ -184,7 +183,7 @@ export class EpubParser {
    * Extract text from metadata elements that can be string or array.
    * @private
    */
-  _extractText(value) {
+  private _extractText(value: any): string {
     if (!value) return '';
     if (typeof value === 'string') return value;
     if (Array.isArray(value)) return value[0];
@@ -196,20 +195,20 @@ export class EpubParser {
    * Extract content documents in spine order.
    * @private
    */
-  _extractContentDocs() {
-    const opfDir = path.dirname(this.contentOpfPath);
-    const docs = [];
+  private _extractContentDocs(): ContentDoc[] {
+    const opfDir = path.dirname(this.contentOpfPath!);
+    const docs: ContentDoc[] = [];
 
     for (const id of this.spine) {
       const item = this.manifest[id];
       if (!item) continue;
 
       const fullPath = path.posix.join(opfDir, item.href);
-      const entry = this.zip.getEntry(fullPath);
+      const entry = this.zip!.getEntry(fullPath);
 
       if (!entry) {
         // Try the href directly
-        const altEntry = this.zip.getEntry(item.href);
+        const altEntry = this.zip!.getEntry(item.href);
         if (altEntry) {
           const rawContent = altEntry.getData().toString('utf8');
           const dom = parseHtml(rawContent, {

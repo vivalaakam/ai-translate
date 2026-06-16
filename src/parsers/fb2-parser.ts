@@ -1,6 +1,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import { parse as parseHtml } from 'node-html-parser';
 import fs from 'fs';
+import type { BookMetadata, ContentDoc, ParsedEpub } from '../types.js';
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -13,50 +14,50 @@ const xmlParser = new XMLParser({
  * into a format compatible with EpubParser output.
  */
 export class Fb2Parser {
+  private filePath: string;
+  private metadata: BookMetadata | null = null;
+  private contentDocs: ContentDoc[] = [];
+  private rawXml: string | null = null;
+  private parsedXml: Record<string, any> | null = null;
+
   /**
-   * @param {string} filePath - Path to the .fb2 file
+   * @param filePath - Path to the .fb2 file
    */
-  constructor(filePath) {
+  constructor(filePath: string) {
     this.filePath = filePath;
-    this.metadata = null;
-    this.contentDocs = [];
-    this.rawXml = null;
-    this.parsedXml = null;
   }
 
   /**
    * Parse the FB2 file and extract content.
-   * @returns {Promise<{metadata: object, contentDocs: Array}>}
    */
-  async parse() {
+  async parse(): Promise<ParsedEpub> {
     this.rawXml = fs.readFileSync(this.filePath, 'utf8');
-    this.parsedXml = xmlParser.parse(this.rawXml);
+    this.parsedXml = xmlParser.parse(this.rawXml) as Record<string, any>;
 
     this._extractMetadata();
     this.contentDocs = this._extractContentDocs();
 
     return {
-      metadata: this.metadata,
+      metadata: this.metadata!,
       contentDocs: this.contentDocs,
     };
   }
 
   /**
    * Get metadata from the FB2.
-   * @returns {Promise<{title: string, author: string, language: string}>}
    */
-  async getMetadata() {
+  async getMetadata(): Promise<BookMetadata> {
     if (!this.metadata) {
       await this.parse();
     }
-    return this.metadata;
+    return this.metadata!;
   }
 
   /**
    * Extract metadata from FB2 description.
    * @private
    */
-  _extractMetadata() {
+  private _extractMetadata(): void {
     const fb = this.parsedXml?.FictionBook;
     if (!fb) {
       this.metadata = { title: 'Unknown', author: 'Unknown', language: 'en' };
@@ -83,8 +84,8 @@ export class Fb2Parser {
    * Extract content from FB2 body sections.
    * @private
    */
-  _extractContentDocs() {
-    const docs = [];
+  private _extractContentDocs(): ContentDoc[] {
+    const docs: ContentDoc[] = [];
     const fb = this.parsedXml?.FictionBook;
     if (!fb) return docs;
 
@@ -119,7 +120,7 @@ export class Fb2Parser {
    * Convert FB2 section to XHTML.
    * @private
    */
-  _sectionToHtml(section, title) {
+  private _sectionToHtml(section: any, title: string | null): string {
     const titleHtml = title ? `<h1>${this._escapeHtml(title)}</h1>\n` : '';
     const bodyContent = this._convertSection(section);
 
@@ -139,7 +140,7 @@ ${titleHtml}${bodyContent}
    * Recursively convert an FB2 section to HTML body content.
    * @private
    */
-  _convertSection(section) {
+  private _convertSection(section: any): string {
     if (!section || typeof section === 'string') {
       return typeof section === 'string' ? this._escapeHtml(section) : '';
     }
@@ -168,8 +169,8 @@ ${titleHtml}${bodyContent}
    * Convert a single FB2 element to HTML.
    * @private
    */
-  _convertElement(tagName, value) {
-    const tagMap = {
+  private _convertElement(tagName: string, value: any): string {
+    const tagMap: Record<string, string> = {
       'p': 'p',
       'section': 'div',
       'subtitle': 'h2',
@@ -207,7 +208,7 @@ ${titleHtml}${bodyContent}
     }
 
     // Get text content
-    let content;
+    let content: string;
     if (typeof value === 'string') {
       content = this._escapeHtml(value);
     } else if (value === null || value === undefined) {
@@ -234,7 +235,7 @@ ${titleHtml}${bodyContent}
    * Recursively convert children of an element.
    * @private
    */
-  _convertChildren(obj) {
+  private _convertChildren(obj: any): string {
     if (typeof obj === 'string') {
       return this._escapeHtml(obj);
     }
@@ -267,7 +268,7 @@ ${titleHtml}${bodyContent}
    * Extract section title from FB2 <title> element.
    * @private
    */
-  _extractSectionTitle(section) {
+  private _extractSectionTitle(section: any): string | null {
     if (!section || typeof section === 'string') return null;
 
     const title = section.title;
@@ -275,31 +276,31 @@ ${titleHtml}${bodyContent}
 
     const paragraphs = this._asArray(title.p || []);
     return paragraphs
-      .map(p => typeof p === 'string' ? p : this._extractTextValue(p))
+      .map((p: any) => typeof p === 'string' ? p : this._extractTextValue(p))
       .filter(Boolean)
       .join(' ');
   }
 
   // --- Utility methods ---
 
-  _asArray(val) {
+  private _asArray(val: any): any[] {
     if (val === undefined || val === null) return [];
     return Array.isArray(val) ? val : [val];
   }
 
-  _extractTextValue(node) {
+  private _extractTextValue(node: any): string {
     if (!node) return '';
     if (typeof node === 'string') return node;
     if (node['#text']) return String(node['#text']);
     // Try nested values
     for (const val of Object.values(node)) {
       if (typeof val === 'string') return val;
-      if (val?.['#text']) return String(val['#text']);
+      if ((val as any)?.['#text']) return String((val as any)['#text']);
     }
     return '';
   }
 
-  _escapeHtml(str) {
+  private _escapeHtml(str: string | null | undefined): string {
     if (!str) return '';
     return String(str)
       .replace(/&/g, '&amp;')

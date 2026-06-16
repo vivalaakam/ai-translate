@@ -12,11 +12,12 @@ import { OllamaClient } from '../translators/ollama-client.js';
 import { TranslationOrchestrator } from '../translators/orchestrator.js';
 import { SUPPORTED_INPUT_FORMATS, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_CHUNK_SIZE } from '../utils/constants.js';
 import { formatProgress, formatStats } from './progress.js';
+import type { ParsedEpub, TranslationProgress } from '../types.js';
 
 /**
  * Detect file format from extension.
  */
-function detectFormat(filePath) {
+function detectFormat(filePath: string): string | null {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.epub') return 'epub';
   if (ext === '.fb2') return 'fb2';
@@ -26,7 +27,7 @@ function detectFormat(filePath) {
 /**
  * Generate output path from input path.
  */
-function generateOutputPath(inputPath, targetLang) {
+function generateOutputPath(inputPath: string, targetLang: string): string {
   const dir = path.dirname(inputPath);
   const ext = path.extname(inputPath);
   const base = path.basename(inputPath, ext);
@@ -36,7 +37,7 @@ function generateOutputPath(inputPath, targetLang) {
 /**
  * Main translate command handler.
  */
-async function translateCommand(inputFile, options) {
+async function translateCommand(inputFile: string, options: Record<string, any>): Promise<void> {
   const spinner = ora();
 
   try {
@@ -58,15 +59,15 @@ async function translateCommand(inputFile, options) {
       process.exit(1);
     }
 
-    const targetLang = options.lang;
-    const sourceLang = options.source || 'auto';
-    const model = options.model || DEFAULT_MODEL;
-    const url = options.url || OLLAMA_DEFAULT_URL;
-    const chunkSize = parseInt(options.chunkSize, 10) || DEFAULT_CHUNK_SIZE;
-    const outputPath = options.output || generateOutputPath(inputFile, targetLang);
-    const force = options.force || false;
-    const dryRun = options.dryRun || false;
-    const verbose = options.verbose || false;
+    const targetLang: string = options.lang;
+    const sourceLang: string = options.source || 'auto';
+    const model: string = options.model || DEFAULT_MODEL;
+    const url: string = options.url || OLLAMA_DEFAULT_URL;
+    const chunkSize: number = parseInt(options.chunkSize, 10) || DEFAULT_CHUNK_SIZE;
+    const outputPath: string = options.output || generateOutputPath(inputFile, targetLang);
+    const force: boolean = options.force || false;
+    const dryRun: boolean = options.dryRun || false;
+    const verbose: boolean = options.verbose || false;
 
     // Check if output file exists
     if (fs.existsSync(outputPath) && !force) {
@@ -97,11 +98,11 @@ async function translateCommand(inputFile, options) {
 
     // Parse input file
     spinner.start(`Parsing ${format.toUpperCase()} file...`);
-    let parsed;
+    let parsed: ParsedEpub;
     if (format === 'epub') {
       const parser = new EpubParser(inputFile);
       parsed = await parser.parse();
-    } else if (format === 'fb2') {
+    } else {
       const parser = new Fb2Parser(inputFile);
       parsed = await parser.parse();
     }
@@ -139,7 +140,7 @@ async function translateCommand(inputFile, options) {
       await orchestrator.translateDocument(doc.dom, {
         sourceLang: sourceLang === 'auto' ? parsed.metadata.language : sourceLang,
         targetLang,
-        onProgress: (progress) => {
+        onProgress: (progress: TranslationProgress) => {
           completedNodes = progress.translated;
           docSpinner.text = formatProgress(i + 1, totalDocs, completedNodes, totalNodes, doc.path);
         },
@@ -151,7 +152,7 @@ async function translateCommand(inputFile, options) {
 
     // Write output
     spinner.start('Writing translated EPUB...');
-    const writer = new EpubWriter(parsed);
+    const writer = new EpubWriter(parsed as ParsedEpub);
     for (const doc of parsed.contentDocs) {
       writer.updateContentDoc(doc.path, doc.dom.outerHTML);
     }
@@ -165,9 +166,10 @@ async function translateCommand(inputFile, options) {
     if (spinner.isSpinning) {
       spinner.fail('Error');
     }
-    console.error(chalk.red(`\nError: ${error.message}`));
-    if (options.verbose && error.stack) {
-      console.error(chalk.gray(error.stack));
+    const err = error as Error;
+    console.error(chalk.red(`\nError: ${err.message}`));
+    if (options.verbose && err.stack) {
+      console.error(chalk.gray(err.stack));
     }
     process.exit(1);
   }
@@ -176,7 +178,7 @@ async function translateCommand(inputFile, options) {
 /**
  * Set up and run the CLI.
  */
-export function run() {
+export function run(): void {
   const program = new Command();
 
   program
