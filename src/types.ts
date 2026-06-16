@@ -183,3 +183,67 @@ export interface TranslationJob {
   /** Book metadata (set after parsing) */
   metadata: BookMetadata | null;
 }
+
+// ─── Database types ──────────────────────────────────────────────────
+
+/**
+ * Block types extracted from a book's content documents.
+ * Each block is one semantic unit — a paragraph, heading, image, etc.
+ */
+export type BlockType = 'heading' | 'paragraph' | 'image' | 'list_item' | 'quote' | 'code' | 'table_row' | 'other';
+
+/**
+ * A single block extracted from a book, stored as one row in the blocks table.
+ */
+export interface Block {
+  /** UUID v5 derived from original text (deterministic ID for dedup) */
+  id: string;
+  /** Foreign key to books.id */
+  bookId: string;
+  /** Position index within the chapter (0-based, preserves document order) */
+  index: number;
+  /** Which content document this block belongs to (e.g. "OEBPS/chapter1.xhtml") */
+  docPath: string;
+  /** Semantic block type */
+  type: BlockType;
+  /** Original text content in Markdown */
+  originalMd: string;
+  /** Translated text content in Markdown (null until translated) */
+  translatedMd: string | null;
+  /** Image data as base64 data URI (only for type="image", null otherwise) */
+  imageBase64: string | null;
+  /** Original HTML tag name (e.g. "p", "h1", "img") for reassembly */
+  tagName: string;
+  /** Additional HTML attributes to preserve during reassembly (JSON string) */
+  attributes: string;
+}
+
+/**
+ * A book record stored in the books table.
+ */
+export interface BookRecord {
+  /** UUID v5 derived from keccak256 of the file contents */
+  id: string;
+  /** Book title from metadata */
+  title: string;
+  /** Author name(s) */
+  author: string;
+  /** Source language code */
+  language: string;
+  /** Original filename */
+  filename: string;
+  /** Total number of blocks in this book */
+  totalBlocks: number;
+  /** Number of translated blocks */
+  translatedBlocks: number;
+  /** Target language for translation (null if not yet set) */
+  targetLang: string | null;
+  /** Source language for translation (null if not yet set) */
+  sourceLang: string | null;
+  /** Model used for translation */
+  model: string | null;
+  /** Timestamp when book was imported */
+  createdAt: string;
+  /** Timestamp when translation was completed */
+  completedAt: string | null;
+}

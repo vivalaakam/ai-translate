@@ -1,78 +1,77 @@
 # AGENTS.md — ai-translate
 
 ## Project Overview
-CLI + Web tool for translating EPUB/FB2 books via Ollama models, preserving original formatting.
+CLI + Web tool for translating EPUB/FB2 books via OpenAI-compatible API.
+Blocks are extracted per-paragraph, stored in SQLite, translated one-by-one, then reassembled.
 
 ## Tech Stack
 - **Runtime:** Node.js 22+ (ES modules)
-- **Language:** TypeScript (strict mode)
+- **Language:** TypeScript (strict)
+- **DB:** SQLite via better-sqlite3 (WAL mode, `.data/translate.db`)
+- **Web:** Express 5 + WebSocket (ws)
+- **Translation:** OpenAI-compatible /v1/chat/completions API (Ollama, LM Studio, OpenAI, etc.)
 - **Testing:** Vitest
-- **Web:** Express 5, WebSocket (ws), multer
-- **Key libs:** commander, adm-zip, node-html-parser, fast-xml-parser, ora, chalk
+- **HTML→Markdown:** Turndown
+- **Markdown→HTML:** markdown-it
 
-## Project Structure
+## Architecture
+
+```
+Input file → Parser (Epub/Fb2) → Block Extractor → SQLite DB
+                                                    ↓
+Output EPUB ← Block Assembler ← Translated blocks ← OllamaClient (block-by-block)
+```
+
+### Key Modules
+- `src/db/database.ts` — TranslateDb: SQLite books + blocks tables, UUID v5 IDs
+- `src/parsers/block-extractor.ts` — HTML → Markdown blocks (via Turndown)
+- `src/parsers/block-assembler.ts` — Markdown blocks → HTML (via markdown-it)
+- `src/translators/ollama-client.ts` — OpenAI-compatible /v1/chat/completions streaming
+- `src/web/server.ts` — Express REST API + WebSocket for progress
+- `src/web/pipeline.ts` — block-by-block translation pipeline with DB
+- `src/web/job-queue.ts` — in-memory job tracker for web UI
+
+### Database Schema
+- **books** — id (UUID v5 from keccak256), title, author, language, total_blocks, translated_blocks, target_lang, source_lang, model, timestamps
+- **blocks** — id (UUID v5 from bookId+text), book_id FK, block_index, doc_path, type, original_md, translated_md, image_base64, tag_name, attributes
+
+### Block Types
+`heading`, `paragraph`, `image`, `list_item`, `quote`, `code`, `table_row`, `other`
+
+### ID Generation
+- Book ID: `UUIDv5(keccak256(fileBytes), DNS_NS)`
+- Block ID: `UUIDv5("bookId:docPath:index:originalMd", URL_NS)`
+
+## Key Commands
+- `npm test` — run all tests (103)
+- `npm run build` — compile TypeScript
+- `npm run dev -- book.epub -l ru` — translate via CLI
+- `npm run web` — start web UI on port 3000
+- `npm run typecheck` — tsc --noEmit
+
+## Environment Variables
+See `.env.example` — OPENAI_BASE_URL, OLLAMA_MODEL, OPENAI_API_KEY, CHUNK_SIZE, PORT
+
+## File Structure
 ```
 src/
-  index.ts               # Entry point
-  types.ts               # Shared TypeScript interfaces
-  cli/commands.ts         # Commander CLI (translate + web subcommands)
-  cli/progress.ts         # Spinner/progress UI
-  parsers/epub-parser.ts  # EPUB ZIP parser
-  parsers/epub-writer.ts  # EPUB reassembler
-  parsers/fb2-parser.ts   # FB2 XML parser
-  translators/ollama-client.ts   # Ollama REST API client
-  translators/orchestrator.ts    # DOM text extraction/translation
-  web/server.ts           # Express web server + WebSocket
-  web/job-queue.ts        # Translation job tracker
-  web/pipeline.ts         # Web translation pipeline
-  web/public/index.html   # Web UI (single-page app)
-test/
-  index.test.js
-  parsers/epub-parser.test.js
-  parsers/epub-writer.test.js
-  parsers/fb2-parser.test.js
-  translators/ollama-client.test.js
-  translators/orchestrator.test.js
-  integration/pipeline.test.js
-  web/server.test.js
-  fixtures/
+  cli/commands.ts       — CLI (translate, web subcommands)
+  db/database.ts         — SQLite manager
+  parsers/
+    epub-parser.ts       — EPUB → ParsedEpub
+    fb2-parser.ts         — FB2 → ParsedEpub
+    epub-writer.ts       — ParsedEpub → EPUB
+    block-extractor.ts   — ParsedEpub → Block[]
+    block-assembler.ts   — Block[] → HTML
+  translators/
+    ollama-client.ts     — OpenAI-compatible API client
+    orchestrator.ts      — legacy chunk translator (pre-DB)
+  utils/constants.ts     — config defaults from env
+  web/
+    server.ts            — Express + WebSocket
+    pipeline.ts          — block-by-block translation
+    job-queue.ts         — in-memory job tracker
+    public/index.html     — web UI
+  types.ts               — shared interfaces
+test/                     — Vitest test files
 ```
-
-## Commands
-- `npm run build` — compile TypeScript to dist/
-- `npm test` — run all tests with vitest (76 tests)
-- `npm run test:watch` — run tests in watch mode
-- `npm run dev -- <input> -l <lang>` — run CLI via tsx (development)
-- `npm run web` — start web server on port 3000
-- `npm start` — run compiled CLI from dist/
-- `npm run typecheck` — type-check without emitting
-
-## Web Server
-- `npm run web` or `node dist/index.js web [--port 3000] [--url http://localhost:11434]`
-- Web UI at http://localhost:3000
-- API endpoints:
-  - POST /api/translate — upload file + start translation (multipart form)
-  - GET /api/jobs — list all jobs
-  - GET /api/jobs/:id — job status
-  - GET /api/jobs/:id/download — download translated file
-  - DELETE /api/jobs/:id — delete job
-  - GET /api/models — list Ollama models
-  - GET /api/health — health check
-- WebSocket at /ws for real-time job updates
-
-## Commit Convention
-- `feat:` new features
-- `fix:` bug fixes
-- `refactor:` code restructuring
-- `test:` adding/updating tests
-- `docs:` documentation changes
-- `chore:` maintenance tasks
-
-## Rules
-- Every task ends with a commit only if all tests pass
-- All new code must have corresponding tests
-- TypeScript strict mode — all types must be explicit
-- ES modules only (import/export, not require)
-- Use .js extensions in relative imports for Node16 module resolution
-- Use async/await, no raw callbacks
-- Preserve original formatting: never strip HTML tags, CSS, or structural elements

@@ -9,11 +9,13 @@ import { EpubParser } from '../parsers/epub-parser.js';
 import { Fb2Parser } from '../parsers/fb2-parser.js';
 import { EpubWriter } from '../parsers/epub-writer.js';
 import { OllamaClient } from '../translators/ollama-client.js';
-import { TranslationOrchestrator } from '../translators/orchestrator.js';
+import { TranslateDb, generateBookId } from '../db/database.js';
+import { extractAllBlocks } from '../parsers/block-extractor.js';
+import { assembleDocHtml } from '../parsers/block-assembler.js';
 import { SUPPORTED_INPUT_FORMATS, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_CHUNK_SIZE, DEFAULT_PORT, DEFAULT_API_KEY } from '../utils/constants.js';
 import { formatProgress, formatStats } from './progress.js';
 import { startServer } from '../web/server.js';
-import type { ParsedEpub, TranslationProgress } from '../types.js';
+import type { ParsedEpub, Block } from '../types.js';
 
 /**
  * Detect file format from extension.
@@ -36,7 +38,7 @@ function generateOutputPath(inputPath: string, targetLang: string): string {
 }
 
 /**
- * Main translate command handler.
+ * Main translate command handler — block-by-block via SQLite.
  */
 async function translateCommand(inputFile: string, options: Record<string, any>): Promise<void> {
   const spinner = ora();
@@ -65,7 +67,6 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
     const model: string = options.model || DEFAULT_MODEL;
     const url: string = options.url || OLLAMA_DEFAULT_URL;
     const apiKey: string = options.apiKey || DEFAULT_API_KEY;
-    const chunkSize: number = parseInt(options.chunkSize, 10) || DEFAULT_CHUNK_SIZE;
     const outputPath: string = options.output || generateOutputPath(inputFile, targetLang);
     const force: boolean = options.force || false;
     const dryRun: boolean = options.dryRun || false;
@@ -85,22 +86,21 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
     console.log(chalk.white(`  Language:  ${sourceLang} → ${targetLang}`));
     console.log(chalk.white(`  Model:     ${model}`));
     console.log(chalk.white(`  API:       ${url}`));
-    console.log(chalk.white(`  Chunk size: ${chunkSize} chars`));
     if (apiKey) {
       console.log(chalk.white(`  API key:   ****${apiKey.slice(-4)}`));
     }
     console.log();
 
-    // Check Ollama availability
+    // Check API availability
     const client = new OllamaClient({ baseUrl: url, model, apiKey });
-    spinner.start('Checking Ollama availability...');
+    spinner.start('Checking API availability...');
     const available = await client.checkAvailable();
     if (!available) {
-      spinner.fail(`Ollama is not available at ${url}`);
-      console.error(chalk.gray('Make sure Ollama is running: ollama serve'));
+      spinner.fail(`API is not available at ${url}`);
+      console.error(chalk.gray('Make sure your API server is running.'));
       process.exit(1);
     }
-    spinner.succeed('Ollama is available');
+    spinner.succeed('API is available');
 
     // Parse input file
     spinner.start(`Parsing ${format.toUpperCase()} file...`);
@@ -120,53 +120,105 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
       console.log(chalk.gray(`  Language: ${parsed.metadata.language}`));
     }
 
-    // Extract text and count
-    const orchestrator = new TranslationOrchestrator(client, { chunkSize });
-    let totalNodes = 0;
-    for (const doc of parsed.contentDocs) {
-      totalNodes += orchestrator.extractTextNodes(doc.dom).length;
+    // Generate book ID and open DB
+    const fileBuffer = fs.readFileSync(inputFile);
+    const bookId = generateBookId(fileBuffer);
+    const db = new TranslateDb();
+
+    // Extract blocks and store in DB
+    spinner.start('Extracting blocks...');
+    const blocks = extractAllBlocks(parsed.contentDocs, bookId);
+
+    // Insert or update book record
+    const existingBook = db.getBook(bookId);
+    if (!existingBook) {
+      db.insertBook({
+        id: bookId,
+        title: parsed.metadata.title,
+        author: parsed.metadata.author,
+        language: parsed.metadata.language,
+        filename: path.basename(inputFile),
+        totalBlocks: blocks.length,
+        targetLang,
+        sourceLang,
+        model,
+      });
+    } else {
+      db.setBookTranslationConfig(bookId, targetLang, sourceLang, model);
     }
-    console.log(chalk.white(`  Translatable text nodes: ${totalNodes}`));
+
+    db.insertBlocks(blocks);
+    spinner.succeed(`Extracted ${blocks.length} blocks`);
+
+    // Skip image blocks for translation count
+    const translatableBlocks = blocks.filter(b => b.type !== 'image');
+    console.log(chalk.white(`  Total blocks: ${blocks.length} (translatable: ${translatableBlocks})`));
 
     if (dryRun) {
       console.log(chalk.yellow('\n--dry-run mode: no translation performed.'));
-      console.log(chalk.white(`  Would translate ${totalNodes} text nodes in ${parsed.contentDocs.length} documents.`));
+      console.log(chalk.white(`  Would translate ${translatableBlocks.length} blocks in ${parsed.contentDocs.length} documents.`));
+      db.close();
       return;
     }
 
-    // Translate each content document
-    console.log(chalk.cyan('\nTranslating...\n'));
-    const totalDocs = parsed.contentDocs.length;
-    let completedNodes = 0;
+    // Check if translation already completed
+    const untranslated = db.getUntranslatedBlocks(bookId);
+    if (untranslated.length === 0) {
+      console.log(chalk.green('\n✅ Book is already fully translated!'));
+    } else {
+      // Translate blocks one by one
+      console.log(chalk.cyan('\nTranslating block-by-block...\n'));
+      const resolvedSourceLang = sourceLang === 'auto' ? parsed.metadata.language : sourceLang;
+      const totalToTranslate = untranslated.length;
+      let done = 0;
 
-    for (let i = 0; i < totalDocs; i++) {
-      const doc = parsed.contentDocs[i];
-      const docSpinner = ora(`Document ${i + 1}/${totalDocs}: ${path.basename(doc.path)}`).start();
+      for (const block of untranslated) {
+        const blockSpinner = ora(`Block ${done + 1}/${totalToTranslate}: ${block.originalMd.slice(0, 50)}...`).start();
 
-      await orchestrator.translateDocument(doc.dom, {
-        sourceLang: sourceLang === 'auto' ? parsed.metadata.language : sourceLang,
-        targetLang,
-        onProgress: (progress: TranslationProgress) => {
-          completedNodes = progress.translated;
-          docSpinner.text = formatProgress(i + 1, totalDocs, completedNodes, totalNodes, doc.path);
-        },
-      });
+        try {
+          const translatedMd = await client.translate(block.originalMd, {
+            sourceLang: resolvedSourceLang,
+            targetLang,
+            maxRetries: 3,
+          });
 
-      // Update the content document in the writer
-      docSpinner.succeed(formatProgress(i + 1, totalDocs, completedNodes, totalNodes, doc.path, true));
+          db.updateBlockTranslation(block.id, translatedMd);
+          done++;
+
+          const progress = Math.round((done / totalToTranslate) * 100);
+          blockSpinner.succeed(`[${progress}%] Block ${done}/${totalToTranslate} ✓`);
+        } catch (err: any) {
+          // Fallback to original on error
+          db.updateBlockTranslation(block.id, block.originalMd);
+          done++;
+          blockSpinner.warn(`Block ${done}/${totalToTranslate} — fallback to original: ${err.message}`);
+        }
+      }
+
+      db.updateBookProgress(bookId, db.countBlocks(bookId).translated);
     }
 
-    // Write output
-    spinner.start('Writing translated EPUB...');
-    const writer = new EpubWriter(parsed as ParsedEpub);
-    for (const doc of parsed.contentDocs) {
-      writer.updateContentDoc(doc.path, doc.dom.outerHTML);
+    // Assemble translated EPUB
+    spinner.start('Assembling translated EPUB...');
+    const writer = new EpubWriter(parsed);
+    const docPaths = db.getDocPaths(bookId);
+
+    for (const docPath of docPaths) {
+      const docBlocks = db.getBlocksByDoc(bookId, docPath);
+      const html = assembleDocHtml(docBlocks);
+      writer.updateContentDoc(docPath, html);
     }
+
     await writer.write(outputPath);
+    db.completeBook(bookId);
+    db.close();
+
     spinner.succeed(chalk.green(`Written to: ${outputPath}`));
 
+    const counts = db.countBlocks(bookId);
     console.log(chalk.cyan(`\n✅ Translation complete!`));
-    console.log(formatStats(totalNodes, totalDocs, outputPath));
+    console.log(chalk.white(`  Blocks: ${counts.translated}/${counts.total} translated`));
+    console.log(chalk.white(`  Output: ${outputPath}`));
 
   } catch (error) {
     if (spinner.isSpinning) {
@@ -210,8 +262,8 @@ export function run(): void {
 
   program
     .name('ai-translate')
-    .description('Translate EPUB/FB2 books using Ollama models while preserving formatting')
-    .version('0.1.0');
+    .description('Translate EPUB/FB2 books using OpenAI-compatible API while preserving formatting')
+    .version('0.2.0');
 
   // translate command (default)
   program
@@ -224,7 +276,6 @@ export function run(): void {
     .option('-m, --model <model>', 'Model name', DEFAULT_MODEL)
     .option('-u, --url <url>', 'API base URL', OLLAMA_DEFAULT_URL)
     .option('-k, --api-key <key>', 'API key (or set OPENAI_API_KEY env)', DEFAULT_API_KEY)
-    .option('-c, --chunk-size <n>', 'Max chars per translation chunk', String(DEFAULT_CHUNK_SIZE))
     .option('-f, --force', 'Overwrite output file if exists')
     .option('--dry-run', 'Show what would be translated without translating')
     .option('-v, --verbose', 'Verbose output')

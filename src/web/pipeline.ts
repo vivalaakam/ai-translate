@@ -1,35 +1,53 @@
 import path from 'path';
 import fs from 'fs';
 
-import { JobQueue } from './job-queue.js';
+import { TranslateDb, generateBookId } from '../db/database.js';
 import { EpubParser } from '../parsers/epub-parser.js';
 import { Fb2Parser } from '../parsers/fb2-parser.js';
 import { EpubWriter } from '../parsers/epub-writer.js';
 import { OllamaClient } from '../translators/ollama-client.js';
-import { TranslationOrchestrator } from '../translators/orchestrator.js';
-import { JobQueue as JQStatic } from './job-queue.js';
+import { extractAllBlocks } from '../parsers/block-extractor.js';
+import { assembleDocHtml } from '../parsers/block-assembler.js';
+import { JobQueue as JQStatic } from '../web/job-queue.js';
+import { JobQueue } from '../web/job-queue.js';
 import type { TranslationJob } from '../types.js';
 
 /**
- * Run the full translation pipeline for a job.
+ * Run the full block-based translation pipeline for a job.
+ *
+ * 1. Parse the book file
+ * 2. Extract blocks → store in SQLite
+ * 3. Translate each untranslated block individually
+ * 4. Assemble translated blocks back into EPUB
+ *
  * Updates the job status in the queue as it progresses.
  */
 export async function runTranslation(
   job: TranslationJob,
   jobQueue: JobQueue,
-  options?: { ollamaUrl?: string; apiKey?: string },
+  options?: { ollamaUrl?: string; apiKey?: string; dbPath?: string },
 ): Promise<void> {
   const ollamaUrl = options?.ollamaUrl || 'http://localhost:11434';
   const apiKey = options?.apiKey || '';
   const outputDir = JQStatic.getOutputDir();
+  const db = new TranslateDb(options?.dbPath);
 
   try {
     // ── Step 1: Parse ──────────────────────────────────────────
     jobQueue.updateStatus(job.id, 'parsing', 'Parsing file...', 5);
 
     const ext = path.extname(job.inputPath).toLowerCase();
-    let parsed;
+    const fileBuffer = fs.readFileSync(job.inputPath);
+    const bookId = generateBookId(fileBuffer);
 
+    // Check if book already exists in DB (resume support)
+    const existingBook = db.getBook(bookId);
+    if (existingBook && existingBook.completedAt) {
+      jobQueue.updateStatus(job.id, 'completed', `Book already translated: "${existingBook.title}"`, 100);
+      return;
+    }
+
+    let parsed;
     if (ext === '.epub') {
       const parser = new EpubParser(job.inputPath);
       parsed = await parser.parse();
@@ -40,48 +58,93 @@ export async function runTranslation(
       throw new Error(`Unsupported file format: ${ext}`);
     }
 
-    // Store metadata
-    jobQueue.setMetadata(job.id, parsed.metadata);
-    jobQueue.updateStatus(job.id, 'parsing', `Parsed: "${parsed.metadata.title}" — ${parsed.contentDocs.length} chapters`, 10);
+    // ── Step 2: Extract blocks ────────────────────────────────
+    jobQueue.updateStatus(job.id, 'parsing', 'Extracting blocks...', 8);
 
-    // ── Step 2: Translate ──────────────────────────────────────
-    jobQueue.updateStatus(job.id, 'translating', 'Starting translation...', 15);
+    const blocks = extractAllBlocks(parsed.contentDocs, bookId);
+
+    // Store book record
+    if (!existingBook) {
+      db.insertBook({
+        id: bookId,
+        title: parsed.metadata.title,
+        author: parsed.metadata.author,
+        language: parsed.metadata.language,
+        filename: job.originalFilename,
+        totalBlocks: blocks.length,
+        targetLang: job.targetLang,
+        sourceLang: job.sourceLang,
+        model: job.model,
+      });
+    } else {
+      db.setBookTranslationConfig(bookId, job.targetLang, job.sourceLang, job.model);
+    }
+
+    // Store blocks
+    db.insertBlocks(blocks);
+
+    // Store metadata on job
+    jobQueue.setMetadata(job.id, parsed.metadata);
+    jobQueue.updateStatus(job.id, 'parsing', `Parsed: "${parsed.metadata.title}" — ${blocks.length} blocks`, 10);
+
+    // ── Step 3: Translate blocks ──────────────────────────────
+    jobQueue.updateStatus(job.id, 'translating', 'Starting block-by-block translation...', 12);
 
     const client = new OllamaClient({ baseUrl: ollamaUrl, model: job.model, apiKey });
-    const orchestrator = new TranslationOrchestrator(client);
+    const sourceLang = job.sourceLang === 'auto' ? parsed.metadata.language : job.sourceLang;
 
-    // Count total text nodes for progress
-    let totalNodes = 0;
-    for (const doc of parsed.contentDocs) {
-      totalNodes += orchestrator.extractTextNodes(doc.dom).length;
+    // Get only untranslated blocks (skip images, already translated)
+    const untranslated = db.getUntranslatedBlocks(bookId);
+    const totalToTranslate = untranslated.length;
+    let translatedCount = 0;
+
+    // Get existing count for progress
+    const counts = db.countBlocks(bookId);
+    const alreadyTranslated = counts.translated;
+
+    for (let i = 0; i < untranslated.length; i++) {
+      const block = untranslated[i];
+
+      try {
+        const translatedMd = await client.translate(block.originalMd, {
+          sourceLang,
+          targetLang: job.targetLang,
+          maxRetries: 3,
+        });
+
+        db.updateBlockTranslation(block.id, translatedMd);
+        translatedCount++;
+
+        // Update progress: 12% (start) → 90% (translation done)
+        const overallProgress = 12 + Math.round((translatedCount / totalToTranslate) * 78);
+        const chapterMsg = `Block ${i + 1}/${totalToTranslate}: ${block.originalMd.slice(0, 40)}...`;
+        jobQueue.updateStatus(job.id, 'translating', chapterMsg, overallProgress);
+
+        // Update book progress
+        db.updateBookProgress(bookId, alreadyTranslated + translatedCount);
+      } catch (err: any) {
+        // Log but continue — one block failure shouldn't stop the whole book
+        console.error(`Failed to translate block ${block.id}: ${err.message}`);
+        // Store empty translation to mark as attempted
+        db.updateBlockTranslation(block.id, block.originalMd); // Fallback to original
+        translatedCount++;
+      }
     }
 
-    let completedNodes = 0;
-    const totalDocs = parsed.contentDocs.length;
+    // Mark book as complete
+    db.completeBook(bookId);
 
-    for (let i = 0; i < totalDocs; i++) {
-      const doc = parsed.contentDocs[i];
-
-      await orchestrator.translateDocument(doc.dom, {
-        sourceLang: job.sourceLang === 'auto' ? parsed.metadata.language : job.sourceLang,
-        targetLang: job.targetLang,
-        onProgress: (progress) => {
-          completedNodes = progress.translated;
-          // Progress: 15% (start) → 90% (translation done)
-          const docProgress = ((i + progress.translated / progress.totalNodes) / totalDocs);
-          const overallProgress = 15 + Math.round(docProgress * 75);
-          const chapterMsg = `Chapter ${i + 1}/${totalDocs}: ${path.basename(doc.path)}`;
-          jobQueue.updateStatus(job.id, 'translating', chapterMsg, overallProgress);
-        },
-      });
-    }
-
-    // ── Step 3: Assemble ────────────────────────────────────────
+    // ── Step 4: Assemble ────────────────────────────────────────
     jobQueue.updateStatus(job.id, 'assembling', 'Assembling translated EPUB...', 92);
 
     const writer = new EpubWriter(parsed);
-    for (const doc of parsed.contentDocs) {
-      writer.updateContentDoc(doc.path, doc.dom.outerHTML);
+
+    // Reassemble each content doc from its blocks
+    const docPaths = db.getDocPaths(bookId);
+    for (const docPath of docPaths) {
+      const docBlocks = db.getBlocksByDoc(bookId, docPath);
+      const html = assembleDocHtml(docBlocks);
+      writer.updateContentDoc(docPath, html);
     }
 
     const baseName = path.basename(job.originalFilename, path.extname(job.originalFilename));
@@ -94,5 +157,7 @@ export async function runTranslation(
   } catch (err: any) {
     jobQueue.setError(job.id, err.message || 'Unknown error');
     jobQueue.updateStatus(job.id, 'failed', `Failed: ${err.message}`, 0);
+  } finally {
+    db.close();
   }
 }
