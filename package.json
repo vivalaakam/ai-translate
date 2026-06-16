@@ -1,0 +1,29 @@
+{
+  "name": "ai-translate",
+  "version": "0.1.0",
+  "description": "CLI tool to translate EPUB/FB2 books using Ollama models while preserving formatting",
+  "main": "src/index.js",
+  "type": "module",
+  "bin": {
+    "ai-translate": "./src/index.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "node src/index.js"
+  },
+  "keywords": ["epub", "fb2", "translate", "ollama", "cli"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "fast-xml-parser": "^5.2.5",
+    "node-html-parser": "^7.0.1",
+    "ora": "^8.2.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.3"
+  }
+}

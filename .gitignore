@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.epub
+*.fb2
+*.zip
+.env
+test/fixtures/output/
