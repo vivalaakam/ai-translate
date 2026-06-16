@@ -10,6 +10,33 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = path.join(__dirname, '..', 'fixtures');
 const SAMPLE_EPUB = path.join(FIXTURES_DIR, 'sample.epub');
 
+/** Helper: send a JSON-RPC request */
+async function rpc(port, method, params = {}) {
+  const id = Date.now() + Math.random();
+  const res = await fetch(`http://localhost:${port}/rpc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method, params, id }),
+  });
+  return await res.json();
+}
+
+/** Helper: send a JSON-RPC request with file upload (multipart) */
+async function rpcUpload(port, method, params, filePath) {
+  const id = Date.now() + Math.random();
+  const form = new FormData();
+  const fileBuffer = fs.readFileSync(filePath);
+  const fileName = path.basename(filePath);
+  form.append('file', new Blob([fileBuffer]), fileName);
+  form.append('rpc', JSON.stringify({ jsonrpc: '2.0', method, params, id }));
+
+  const res = await fetch(`http://localhost:${port}/rpc`, {
+    method: 'POST',
+    body: form,
+  });
+  return await res.json();
+}
+
 describe('JobQueue', () => {
   it('should create a job with correct defaults', () => {
     const queue = new JobQueue();
@@ -150,7 +177,7 @@ describe('JobQueue', () => {
   });
 });
 
-describe('Web Server API', () => {
+describe('JSON-RPC API', () => {
   let server;
   let jobQueue;
   let port;
@@ -173,123 +200,122 @@ describe('Web Server API', () => {
     server.close();
   });
 
-  it('should serve health check', async () => {
-    const res = await fetch(`http://localhost:${port}/api/health`);
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.status).toBe('ok');
+  // ── System ──────────────────────────────────────
+
+  it('should return health check via system.health', async () => {
+    const data = await rpc(port, 'system.health');
+    expect(data.result.status).toBe('ok');
+    expect(typeof data.result.uptime).toBe('number');
   });
 
-  it('should serve the web UI', async () => {
-    const res = await fetch(`http://localhost:${port}/`);
-    expect(res.status).toBe(200);
-    const html = await res.text();
-    expect(html).toContain('AI Translate');
+  it('should return config via system.config', async () => {
+    const data = await rpc(port, 'system.config');
+    expect(typeof data.result.uploadOnly).toBe('boolean');
+    expect(typeof data.result.defaultModel).toBe('string');
   });
 
-  it('should return config', async () => {
-    const res = await fetch(`http://localhost:${port}/api/config`);
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(typeof data.uploadOnly).toBe('boolean');
-    expect(typeof data.defaultModel).toBe('string');
+  it('should return method discovery via system.discover', async () => {
+    const data = await rpc(port, 'system.discover');
+    const methods = data.result.map((s) => s.method);
+    expect(methods).toContain('system.health');
+    expect(methods).toContain('system.errors');
+    expect(methods).toContain('book.upload');
+    expect(methods).toContain('book.translate');
+    expect(methods).toContain('book.list');
   });
 
-  // ── Upload-only endpoint ──────────────────────────────────
+  it('should return error codes via system.errors', async () => {
+    const data = await rpc(port, 'system.errors');
+    expect(Array.isArray(data.result.errors)).toBe(true);
+    expect(data.result.errors.length).toBeGreaterThan(5);
+    // Standard JSON-RPC errors
+    const codes = data.result.errors.map((e) => e.code);
+    expect(codes).toContain(-32700);
+    expect(codes).toContain(-32601);
+    // Application errors
+    expect(codes.some((c) => c >= 10001)).toBe(true);
+  });
 
-  it('should return 400 for upload-only without file', async () => {
-    const res = await fetch(`http://localhost:${port}/api/upload`, {
+  // ── Error handling ──────────────────────────────
+
+  it('should return METHOD_NOT_FOUND for unknown method', async () => {
+    const data = await rpc(port, 'nonexistent.method');
+    expect(data.error.code).toBe(-32601);
+  });
+
+  it('should return INVALID_PARAMS for non-object params', async () => {
+    const id = Date.now();
+    const res = await fetch(`http://localhost:${port}/rpc`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'system.health', params: 'bad', id }),
     });
-    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error.code).toBe(-32602);
   });
 
-  it('should accept upload-only and create a job', async () => {
+  // ── Upload ───────────────────────────────────────
+
+  it('should return FILE_REQUIRED error for book.upload without file', async () => {
+    const data = await rpc(port, 'book.upload');
+    expect(data.error.code).toBe(10001);
+  });
+
+  it('should accept book.upload with file', async () => {
+    const data = await rpcUpload(port, 'book.upload', {}, SAMPLE_EPUB);
+    expect(data.result.jobId).toBeTruthy();
+    expect(data.result.uploadOnly).toBe(true);
+  });
+
+  // ── Translate ───────────────────────────────────
+
+  it('should return FILE_REQUIRED error for book.translate without file', async () => {
+    const data = await rpc(port, 'book.translate', { targetLang: 'ru' });
+    expect(data.error.code).toBe(10001);
+  });
+
+  it('should return TARGET_LANG_REQUIRED for book.translate without targetLang', async () => {
     const form = new FormData();
     const fileBuffer = fs.readFileSync(SAMPLE_EPUB);
     form.append('file', new Blob([fileBuffer]), 'sample.epub');
+    form.append('rpc', JSON.stringify({ jsonrpc: '2.0', method: 'book.translate', params: {}, id: Date.now() }));
 
-    const res = await fetch(`http://localhost:${port}/api/upload`, {
-      method: 'POST',
-      body: form,
-    });
-    expect(res.status).toBe(200);
-
+    const res = await fetch(`http://localhost:${port}/rpc`, { method: 'POST', body: form });
     const data = await res.json();
-    expect(data.jobId).toBeTruthy();
-    expect(data.uploadOnly).toBe(true);
-    expect(['queued', 'parsing', 'completed']).toContain(data.status);
+    expect(data.error.code).toBe(10002);
   });
 
-  // ── Translate endpoint ────────────────────────────────────
-
-  it('should return 400 for translate without file', async () => {
-    const res = await fetch(`http://localhost:${port}/api/translate`, {
-      method: 'POST',
-    });
-    expect(res.status).toBe(400);
+  it('should accept book.translate with file and targetLang', async () => {
+    const data = await rpcUpload(port, 'book.translate', { targetLang: 'es', sourceLang: 'en', model: 'llama3.1' }, SAMPLE_EPUB);
+    expect(data.result.jobId).toBeTruthy();
+    expect(['queued', 'parsing']).toContain(data.result.status);
   });
 
-  it('should return 400 for translate without targetLang', async () => {
-    const form = new FormData();
-    const fileBuffer = fs.readFileSync(SAMPLE_EPUB);
-    form.append('file', new Blob([fileBuffer]), 'sample.epub');
+  // ── Books ────────────────────────────────────────
 
-    const res = await fetch(`http://localhost:${port}/api/translate`, {
-      method: 'POST',
-      body: form,
-    });
-    expect(res.status).toBe(400);
+  it('should list books via book.list', async () => {
+    const data = await rpc(port, 'book.list');
+    expect(Array.isArray(data.result.books)).toBe(true);
   });
 
-  it('should accept a valid translate and create a job', async () => {
-    const form = new FormData();
-    const fileBuffer = fs.readFileSync(SAMPLE_EPUB);
-    form.append('file', new Blob([fileBuffer]), 'sample.epub');
-    form.append('targetLang', 'es');
-    form.append('sourceLang', 'en');
-    form.append('model', 'llama3.1');
-
-    const res = await fetch(`http://localhost:${port}/api/translate`, {
-      method: 'POST',
-      body: form,
-    });
-    expect(res.status).toBe(200);
-
-    const data = await res.json();
-    expect(data.jobId).toBeTruthy();
-    expect(['queued', 'parsing']).toContain(data.status);
+  it('should return BOOK_NOT_FOUND for unknown book', async () => {
+    const data = await rpc(port, 'book.get', { bookId: 'nonexistent-id' });
+    expect(data.error.code).toBe(10003);
   });
 
-  // ── Books endpoints ───────────────────────────────────────
+  // ── Jobs ─────────────────────────────────────────
 
-  it('should list books', async () => {
-    const res = await fetch(`http://localhost:${port}/api/books`);
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(Array.isArray(data.books)).toBe(true);
+  it('should list jobs via job.list', async () => {
+    const data = await rpc(port, 'job.list');
+    expect(data.result.jobs.length).toBeGreaterThan(0);
   });
 
-  it('should return 404 for non-existent book', async () => {
-    const res = await fetch(`http://localhost:${port}/api/books/nonexistent-id`);
-    expect(res.status).toBe(404);
+  it('should return JOB_NOT_FOUND for unknown job', async () => {
+    const data = await rpc(port, 'job.get', { jobId: 'nonexistent-id' });
+    expect(data.error.code).toBe(10004);
   });
 
-  // ── Jobs endpoints ────────────────────────────────────────
-
-  it('should list jobs', async () => {
-    const res = await fetch(`http://localhost:${port}/api/jobs`);
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.jobs.length).toBeGreaterThan(0);
-  });
-
-  it('should return 404 for non-existent job', async () => {
-    const res = await fetch(`http://localhost:${port}/api/jobs/nonexistent-id`);
-    expect(res.status).toBe(404);
-  });
-
-  it('should return 400 for download of incomplete job', async () => {
+  it('should return JOB_NOT_COMPLETE for download of incomplete job', async () => {
     const job = jobQueue.create({
       originalFilename: 'test.epub',
       inputPath: '/tmp/test.epub',
@@ -298,11 +324,11 @@ describe('Web Server API', () => {
       model: 'llama3.1',
     });
 
-    const res = await fetch(`http://localhost:${port}/api/jobs/${job.id}/download`);
-    expect(res.status).toBe(400);
+    const data = await rpc(port, 'book.download', { jobId: job.id });
+    expect(data.error.code).toBe(10005);
   });
 
-  it('should delete a job', async () => {
+  it('should delete a job via job.delete', async () => {
     const job = jobQueue.create({
       originalFilename: 'delete-me.epub',
       inputPath: '/tmp/delete-me.epub',
@@ -311,11 +337,17 @@ describe('Web Server API', () => {
       model: 'llama3.1',
     });
 
-    const res = await fetch(`http://localhost:${port}/api/jobs/${job.id}`, {
-      method: 'DELETE',
-    });
-    expect(res.status).toBe(200);
-
+    const data = await rpc(port, 'job.delete', { jobId: job.id });
+    expect(data.result.deleted).toBe(true);
     expect(jobQueue.get(job.id)).toBeUndefined();
+  });
+
+  // ── Web UI ───────────────────────────────────────
+
+  it('should serve the web UI', async () => {
+    const res = await fetch(`http://localhost:${port}/`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('AI Translate');
   });
 });

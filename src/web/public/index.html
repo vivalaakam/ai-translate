@@ -491,6 +491,55 @@
   </div>
 
   <script>
+    // ─── JSON-RPC client ───────────────────────────────────
+    let rpcId = 0;
+
+    /**
+     * Send a JSON-RPC 2.0 request.
+     * @param {string} method - RPC method name
+     * @param {object} params - Method parameters
+     * @returns {Promise<any>} - The result field from the response
+     * @throws {Error} - If the response contains an error
+     */
+    async function rpc(method, params = {}) {
+      const id = ++rpcId;
+      const res = await fetch('/rpc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method, params, id }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        const err = new Error(data.error.message);
+        err.code = data.error.code;
+        err.data = data.error.data;
+        throw err;
+      }
+      return data.result;
+    }
+
+    /**
+     * Send a JSON-RPC request with a file upload (multipart/form-data).
+     * The file is sent as a regular form field, and the RPC request
+     * is encoded as a JSON string in the "rpc" form field.
+     */
+    async function rpcWithFile(method, params, file) {
+      const id = ++rpcId;
+      const form = new FormData();
+      form.append('file', file);
+      form.append('rpc', JSON.stringify({ jsonrpc: '2.0', method, params, id }));
+
+      const res = await fetch('/rpc', { method: 'POST', body: form });
+      const data = await res.json();
+      if (data.error) {
+        const err = new Error(data.error.message);
+        err.code = data.error.code;
+        err.data = data.error.data;
+        throw err;
+      }
+      return data.result;
+    }
+
     // ─── State ────────────────────────────────────────────────
     let selectedFile = null;
     let ws = null;
@@ -549,7 +598,6 @@
       fileName.textContent = file.name;
       fileInfo.classList.add('visible');
 
-      // Show translate options when file is selected
       translateOptions.style.display = '';
       if (!appConfig.uploadOnly) modelRow.style.display = '';
       updateBtnState();
@@ -557,17 +605,14 @@
 
     // ─── API check ──────────────────────────────────────────
     async function initApp() {
-      // Load config
+      // Load config via RPC
       try {
-        const res = await fetch('/api/config');
-        if (res.ok) appConfig = await res.json();
+        appConfig = await rpc('system.config');
       } catch {}
 
-      // Check models API
+      // Check models via RPC
       try {
-        const res = await fetch('/api/models');
-        if (!res.ok) throw new Error();
-        const data = await res.json();
+        const data = await rpc('model.list');
         models = data.models || [];
 
         apiDot.className = 'api-dot ok';
@@ -583,7 +628,6 @@
         document.getElementById('modalModel').innerHTML = '<option value="">API unavailable</option>';
       }
 
-      // If uploadOnly, hide translate button
       if (appConfig.uploadOnly) {
         translateBtn.style.display = 'none';
         modelRow.style.display = 'none';
@@ -620,26 +664,16 @@
       e.preventDefault();
       if (!selectedFile) return;
 
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-
       uploadBtn.disabled = true;
       translateBtn.disabled = true;
       uploadBtn.textContent = '⏳ Uploading…';
 
       try {
-        const res = await fetch('/api/upload', { method: 'POST', body: formData });
-        const data = await res.json();
-
-        if (res.ok) {
-          resetForm();
-          // Switch to library
-          switchTab('library');
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'subscribe', jobId: data.jobId }));
-          }
-        } else {
-          alert(data.error || 'Upload failed');
+        const result = await rpcWithFile('book.upload', {}, selectedFile);
+        resetForm();
+        switchTab('library');
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'subscribe', jobId: result.jobId }));
         }
       } catch (err) {
         alert('Upload error: ' + err.message);
@@ -652,28 +686,20 @@
     translateBtn.addEventListener('click', async () => {
       if (!selectedFile || !targetLang.value) return;
 
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-      formData.append('sourceLang', sourceLang.value);
-      formData.append('targetLang', targetLang.value);
-      formData.append('model', modelSelect.value);
-
       uploadBtn.disabled = true;
       translateBtn.disabled = true;
       translateBtn.textContent = '⏳ Starting…';
 
       try {
-        const res = await fetch('/api/translate', { method: 'POST', body: formData });
-        const data = await res.json();
-
-        if (res.ok) {
-          resetForm();
-          switchTab('library');
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'subscribe', jobId: data.jobId }));
-          }
-        } else {
-          alert(data.error || 'Failed to start translation');
+        const result = await rpcWithFile('book.translate', {
+          sourceLang: sourceLang.value,
+          targetLang: targetLang.value,
+          model: modelSelect.value,
+        }, selectedFile);
+        resetForm();
+        switchTab('library');
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'subscribe', jobId: result.jobId }));
         }
       } catch (err) {
         alert('Error: ' + err.message);
@@ -694,9 +720,7 @@
     // ─── Books / Library ────────────────────────────────────
     async function loadBooks() {
       try {
-        const res = await fetch('/api/books');
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await rpc('book.list');
         const books = data.books || [];
 
         document.getElementById('bookCount').textContent = `${books.length} book(s)`;
@@ -794,31 +818,26 @@
       const model = document.getElementById('modalModel').value;
 
       try {
-        const res = await fetch(`/api/books/${currentBookId}/translate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ targetLang: tLang, sourceLang: sLang, model }),
+        const result = await rpc('book.startTranslation', {
+          bookId: currentBookId,
+          targetLang: tLang,
+          sourceLang: sLang,
+          model,
         });
-        const data = await res.json();
-
-        if (res.ok) {
-          closeModal();
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'subscribe', jobId: data.jobId }));
-          }
-          loadBooks();
-        } else {
-          alert(data.error || 'Failed to start translation');
+        closeModal();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'subscribe', jobId: result.jobId }));
         }
+        loadBooks();
       } catch (err) {
-        alert('Error: ' + err.message);
+        alert(err.message || 'Failed to start translation');
       }
     };
 
     window.deleteBook = async function(id) {
       if (!confirm('Delete this book and all its data?')) return;
       try {
-        await fetch(`/api/books/${id}`, { method: 'DELETE' });
+        await rpc('book.delete', { bookId: id });
       } catch {}
       const el = document.getElementById('book-' + id);
       if (el) el.remove();
@@ -836,7 +855,6 @@
       ws.addEventListener('message', (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'job:update') {
-          // Refresh book list on any job update
           if (document.getElementById('libraryTab').style.display !== 'none') {
             loadBooks();
           }

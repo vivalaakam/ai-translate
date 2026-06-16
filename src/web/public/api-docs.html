@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Translate — API Documentation</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #242837;
+      --border: #2e3347;
+      --text: #e4e6f0;
+      --text2: #9499b3;
+      --accent: #6c5ce7;
+      --accent2: #a29bfe;
+      --green: #00b894;
+      --red: #e17055;
+      --yellow: #fdcb6e;
+      --blue: #74b9ff;
+      --orange: #e17055;
+      --radius: 12px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    .header {
+      margin-bottom: 32px;
+    }
+    .header h1 {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .header h1 code {
+      background: var(--surface2);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 20px;
+    }
+    .header p {
+      color: var(--text2);
+      font-size: 14px;
+    }
+    .header .endpoint {
+      margin-top: 12px;
+      padding: 12px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 13px;
+    }
+    .header .endpoint strong { color: var(--accent2); }
+
+    /* Sidebar navigation */
+    .layout {
+      display: flex;
+      gap: 24px;
+    }
+    .sidebar {
+      width: 200px;
+      flex-shrink: 0;
+      position: sticky;
+      top: 24px;
+      max-height: calc(100vh - 48px);
+      overflow-y: auto;
+    }
+    .nav-group {
+      margin-bottom: 16px;
+    }
+    .nav-group-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text2);
+      margin-bottom: 6px;
+      padding-left: 8px;
+    }
+    .nav-link {
+      display: block;
+      padding: 4px 8px;
+      font-size: 13px;
+      color: var(--text2);
+      text-decoration: none;
+      border-radius: 4px;
+      transition: all 0.15s;
+    }
+    .nav-link:hover {
+      color: var(--text);
+      background: var(--surface2);
+    }
+    .nav-link.active {
+      color: var(--accent2);
+      background: rgba(108, 92, 231, 0.1);
+    }
+
+    .main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    /* Method card */
+    .method-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin-bottom: 16px;
+    }
+    .method-card:target {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+
+    .method-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .method-name {
+      font-family: monospace;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--accent2);
+    }
+    .method-group-badge {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+    .method-group-badge.system { background: rgba(116, 185, 255, 0.15); color: var(--blue); }
+    .method-group-badge.model { background: rgba(253, 203, 110, 0.15); color: var(--yellow); }
+    .method-group-badge.book { background: rgba(0, 184, 148, 0.15); color: var(--green); }
+    .method-group-badge.job { background: rgba(225, 112, 85, 0.15); color: var(--orange); }
+
+    .method-desc {
+      color: var(--text2);
+      font-size: 14px;
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+
+    /* Schema table */
+    .schema-section {
+      margin-bottom: 16px;
+    }
+    .schema-section h4 {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text2);
+      margin-bottom: 8px;
+    }
+
+    .param-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .param-table th {
+      text-align: left;
+      padding: 8px 12px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text2);
+      border-bottom: 1px solid var(--border);
+    }
+    .param-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    .param-table tr:last-child td { border-bottom: none; }
+    .param-name { font-family: monospace; color: var(--accent2); }
+    .param-type { color: var(--text2); font-family: monospace; font-size: 12px; }
+    .param-required { color: var(--red); font-weight: 600; font-size: 11px; }
+    .param-optional { color: var(--text2); font-size: 11px; }
+    .param-desc { color: var(--text2); }
+    .param-default {
+      font-family: monospace;
+      font-size: 12px;
+      color: var(--yellow);
+    }
+
+    .no-params {
+      color: var(--text2);
+      font-size: 13px;
+      font-style: italic;
+    }
+
+    /* Example */
+    .example {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+      overflow-x: auto;
+      margin-top: 8px;
+    }
+    .example .key { color: var(--accent2); }
+    .example .str { color: var(--green); }
+    .example .num { color: var(--yellow); }
+
+    /* Error codes */
+    .error-section {
+      margin-top: 32px;
+    }
+    .error-section h2 {
+      font-size: 18px;
+      margin-bottom: 16px;
+    }
+
+    .error-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 8px;
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+    .error-code {
+      font-family: monospace;
+      font-weight: 700;
+      color: var(--red);
+      min-width: 60px;
+    }
+    .error-name { font-weight: 600; margin-bottom: 2px; }
+    .error-desc { color: var(--text2); font-size: 13px; }
+
+    @media (max-width: 700px) {
+      .sidebar { display: none; }
+      .layout { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1><code>AI Translate</code> — JSON-RPC 2.0 API</h1>
+      <p>All API methods are available via a single JSON-RPC 2.0 endpoint.</p>
+      <div class="endpoint">
+        <strong>POST /rpc</strong> &nbsp; Content-Type: application/json<br>
+        <strong>POST /rpc</strong> &nbsp; multipart/form-data (for file uploads: <code>file</code> + <code>rpc</code> field)
+      </div>
+    </div>
+
+    <div class="layout">
+      <nav class="sidebar" id="nav"></nav>
+      <div class="main" id="methods"></div>
+    </div>
+
+    <div class="error-section" id="errors"></div>
+  </div>
+
+  <script>
+    // ─── JSON-RPC client ───────────────────────────────────
+    let rpcId = 0;
+    async function rpc(method, params = {}) {
+      const id = ++rpcId;
+      const res = await fetch('/rpc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method, params, id }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      return data.result;
+    }
+
+    // ─── Render ─────────────────────────────────────────────
+    async function render() {
+      let schemas;
+      try {
+        schemas = await rpc('system.discover');
+      } catch (e) {
+        document.getElementById('methods').innerHTML =
+          '<p style="color:var(--red)">Failed to load API schema: ' + e.message + '</p>';
+        return;
+      }
+
+      // Group methods by namespace
+      const groups = {};
+      schemas.forEach(s => {
+        const ns = s.method.split('.')[0];
+        if (!groups[ns]) groups[ns] = [];
+        groups[ns].push(s);
+      });
+
+      // Render sidebar nav
+      const nav = document.getElementById('nav');
+      const nsOrder = ['system', 'model', 'book', 'job'];
+      const nsLabels = { system: 'System', model: 'Models', book: 'Books', job: 'Jobs' };
+      nsOrder.forEach(ns => {
+        if (!groups[ns]) return;
+        const div = document.createElement('div');
+        div.className = 'nav-group';
+        div.innerHTML = `<div class="nav-group-title">${nsLabels[ns] || ns}</div>` +
+          groups[ns].map(s =>
+            `<a class="nav-link" href="#${s.method}">${s.method}</a>`
+          ).join('');
+        nav.appendChild(div);
+      });
+
+      // Render method cards
+      const main = document.getElementById('methods');
+      main.innerHTML = schemas.map(s => renderMethod(s, nsLabels[s.method.split('.')[0]] || s.method.split('.')[0])).join('');
+
+      // Render error codes
+      renderErrors();
+    }
+
+    function renderMethod(s, groupLabel) {
+      const ns = s.method.split('.')[0];
+
+      // Params table
+      let paramsHtml;
+      const paramKeys = Object.keys(s.params || {});
+      if (paramKeys.length === 0) {
+        paramsHtml = '<p class="no-params">No parameters</p>';
+      } else {
+        paramsHtml = `<table class="param-table">
+          <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th><th>Default</th></tr></thead>
+          <tbody>${paramKeys.map(k => {
+            const p = s.params[k];
+            return `<tr>
+              <td class="param-name">${k}</td>
+              <td class="param-type">${p.type || 'any'}</td>
+              <td>${p.required ? '<span class="param-required">required</span>' : '<span class="param-optional">optional</span>'}</td>
+              <td class="param-desc">${p.description || ''}</td>
+              <td class="param-default">${p.default !== undefined ? JSON.stringify(p.default) : ''}</td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>`;
+      }
+
+      // Result schema
+      let resultHtml = '';
+      if (s.result) {
+        if (s.result.type === 'file') {
+          resultHtml = `<p class="param-type">file</p><p class="param-desc">${s.result.description || ''}</p>`;
+        } else if (s.result.properties && Object.keys(s.result.properties).length > 0) {
+          resultHtml = `<table class="param-table">
+            <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+            <tbody>${Object.entries(s.result.properties).map(([k, v]) =>
+              `<tr><td class="param-name">${k}</td><td class="param-type">${v.type || 'any'}</td><td class="param-desc">${v.description || ''}</td></tr>`
+            ).join('')}</tbody>
+          </table>`;
+        } else if (s.result.type === 'array') {
+          resultHtml = `<p class="param-type">array</p><p class="param-desc">${s.result.description || ''}</p>`;
+        } else {
+          resultHtml = `<p class="param-type">${s.result.type || 'object'}</p><p class="param-desc">${s.result.description || ''}</p>`;
+        }
+      }
+
+      // Example request
+      const exampleParams = {};
+      paramKeys.forEach(k => {
+        const p = s.params[k];
+        if (p.type === 'file') {
+          exampleParams[k] = '(multipart file upload)';
+        } else if (p.default !== undefined) {
+          exampleParams[k] = p.default;
+        } else if (p.required) {
+          exampleParams[k] = p.type === 'string' ? `"${k}_value"` : p.type === 'number' ? 1 : '...';
+        }
+      });
+      const exampleReq = {
+        jsonrpc: '2.0',
+        method: s.method,
+        params: exampleParams,
+        id: 1,
+      };
+
+      return `<div class="method-card" id="${s.method}">
+        <div class="method-header">
+          <span class="method-name">${s.method}</span>
+          <span class="method-group-badge ${ns}">${groupLabel}</span>
+        </div>
+        <p class="method-desc">${s.description || ''}</p>
+
+        <div class="schema-section">
+          <h4>Parameters</h4>
+          ${paramsHtml}
+        </div>
+
+        <div class="schema-section">
+          <h4>Result</h4>
+          ${resultHtml}
+        </div>
+
+        <div class="schema-section">
+          <h4>Example Request</h4>
+          <div class="example">${highlight(JSON.stringify(exampleReq, null, 2))}</div>
+        </div>
+      </div>`;
+    }
+
+    function highlight(json) {
+      return json
+        .replace(/"([^"]+)":/g, '<span class="key">"$1"</span>:')
+        .replace(/: "([^"]+)"/g, ': <span class="str">"$1"</span>')
+        .replace(/: (\d+)/g, ': <span class="num">$1</span>');
+    }
+
+    async function renderErrors() {
+      let errors;
+      try {
+        const data = await rpc('system.errors');
+        errors = data.errors || [];
+      } catch {
+        errors = [
+          { code: -32700, name: 'Parse Error', description: 'Invalid JSON was received.' },
+          { code: -32600, name: 'Invalid Request', description: 'The JSON sent is not a valid Request object.' },
+          { code: -32601, name: 'Method Not Found', description: 'The method does not exist or is not available.' },
+          { code: -32602, name: 'Invalid Params', description: 'Invalid method parameter(s).' },
+          { code: -32603, name: 'Internal Error', description: 'Internal JSON-RPC error.' },
+        ];
+      }
+
+      const el = document.getElementById('errors');
+      el.innerHTML = `<h2>Error Codes</h2>` +
+        errors.map(e =>
+          `<div class="error-card">
+            <span class="error-code">${e.code}</span>
+            <div>
+              <div class="error-name">${e.name}</div>
+              <div class="error-desc">${e.description}</div>
+            </div>
+          </div>`
+        ).join('');
+    }
+
+    render();
+  </script>
+</body>
+</html>
