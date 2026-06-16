@@ -1091,9 +1091,10 @@
         const result = await rpc('book.export', { bookId, mode });
 
         // Direct link download — Content-Length ensures reliable completion
+        // Use .zip extension — Telegram WebView blocks .epub, but EPUB is valid ZIP
         const a = document.createElement('a');
         a.href = result.downloadUrl;
-        a.download = result.downloadUrl.split('/').pop();
+        a.download = result.downloadUrl.split('/').pop().replace('.epub', '.zip');
         document.body.appendChild(a);
         a.click();
         a.remove();
