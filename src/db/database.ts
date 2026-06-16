@@ -2,7 +2,8 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { v5 as uuidv5 } from 'uuid';
-import { keccak256 } from 'js-sha3';
+import jsSha3 from 'js-sha3';
+const keccak256: (data: string | ArrayBuffer | Buffer) => string = (jsSha3 as any).keccak256;
 import type { Block, BookRecord, BlockType } from '../types.js';
 
 // UUID v5 namespace for book IDs (keccak256-based)
