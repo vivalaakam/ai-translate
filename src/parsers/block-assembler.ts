@@ -98,9 +98,13 @@ export function blockToHtml(block: Block, db?: TranslateDb, bookId?: string, fil
   // Ensure XHTML compliance: self-close void elements
   htmlContent = xhtmlFix(htmlContent);
 
-  // md.render wraps in <p> tags — strip the outer <p> if our target tag isn't <p>
-  if (tagName !== 'p' && htmlContent.startsWith('<p>') && htmlContent.endsWith('</p>')) {
-    htmlContent = htmlContent.slice(3, -4).trim();
+  // md.render wraps inline content in <p> tags — strip if our wrapper tag matches
+  // to avoid double-wrapping like <p class="x"><p>text</p></p>
+  const mdWrapperMatch = htmlContent.match(/^<(\w+)([^>]*)>/);
+  const mdWrapperTag = mdWrapperMatch?.[1];
+  const openTagLen = mdWrapperMatch?.[0]?.length ?? 0;
+  if (mdWrapperTag === tagName && htmlContent.endsWith(`</${mdWrapperTag}>`)) {
+    htmlContent = htmlContent.slice(openTagLen, htmlContent.length - `</${mdWrapperTag}>`.length).trim();
   }
 
   // For list items, Markdown renders as <li> already
