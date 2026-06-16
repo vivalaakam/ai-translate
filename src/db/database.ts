@@ -268,8 +268,8 @@ export class TranslateDb {
 
   getDocPaths(bookId: string): string[] {
     const rows = this.db.prepare(
-      'SELECT DISTINCT doc_path FROM blocks WHERE book_id = ? ORDER BY doc_path'
-    ).all(bookId) as Record<string, string>[];
+      'SELECT doc_path, MIN(block_index) AS min_idx FROM blocks WHERE book_id = ? GROUP BY doc_path ORDER BY min_idx'
+    ).all(bookId) as Record<string, any>[];
     return rows.map(r => r.doc_path);
   }
 
