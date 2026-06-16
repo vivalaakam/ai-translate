@@ -90,10 +90,12 @@ export interface TranslationProgress {
  * Options for constructing an OllamaClient.
  */
 export interface OllamaClientOptions {
-  /** Ollama API base URL (default: "http://localhost:11434") */
+  /** API base URL (default: "http://localhost:11434") */
   baseUrl?: string;
   /** Model name to use for translation (default: "llama3.1") */
   model?: string;
+  /** API key for authentication (optional, for remote providers) */
+  apiKey?: string;
 }
 
 /**

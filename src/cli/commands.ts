@@ -10,7 +10,7 @@ import { Fb2Parser } from '../parsers/fb2-parser.js';
 import { EpubWriter } from '../parsers/epub-writer.js';
 import { OllamaClient } from '../translators/ollama-client.js';
 import { TranslationOrchestrator } from '../translators/orchestrator.js';
-import { SUPPORTED_INPUT_FORMATS, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_CHUNK_SIZE, DEFAULT_PORT } from '../utils/constants.js';
+import { SUPPORTED_INPUT_FORMATS, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_CHUNK_SIZE, DEFAULT_PORT, DEFAULT_API_KEY } from '../utils/constants.js';
 import { formatProgress, formatStats } from './progress.js';
 import { startServer } from '../web/server.js';
 import type { ParsedEpub, TranslationProgress } from '../types.js';
@@ -64,6 +64,7 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
     const sourceLang: string = options.source || 'auto';
     const model: string = options.model || DEFAULT_MODEL;
     const url: string = options.url || OLLAMA_DEFAULT_URL;
+    const apiKey: string = options.apiKey || DEFAULT_API_KEY;
     const chunkSize: number = parseInt(options.chunkSize, 10) || DEFAULT_CHUNK_SIZE;
     const outputPath: string = options.output || generateOutputPath(inputFile, targetLang);
     const force: boolean = options.force || false;
@@ -83,11 +84,15 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
     console.log(chalk.white(`  Output:    ${outputPath}`));
     console.log(chalk.white(`  Language:  ${sourceLang} → ${targetLang}`));
     console.log(chalk.white(`  Model:     ${model}`));
+    console.log(chalk.white(`  API:       ${url}`));
     console.log(chalk.white(`  Chunk size: ${chunkSize} chars`));
+    if (apiKey) {
+      console.log(chalk.white(`  API key:   ****${apiKey.slice(-4)}`));
+    }
     console.log();
 
     // Check Ollama availability
-    const client = new OllamaClient({ baseUrl: url, model });
+    const client = new OllamaClient({ baseUrl: url, model, apiKey });
     spinner.start('Checking Ollama availability...');
     const available = await client.checkAvailable();
     if (!available) {
@@ -183,14 +188,18 @@ async function webCommand(options: Record<string, any>): Promise<void> {
   const port = parseInt(options.port, 10) || DEFAULT_PORT;
   const url = options.url || OLLAMA_DEFAULT_URL;
   const model = options.model || DEFAULT_MODEL;
+  const apiKey = options.apiKey || DEFAULT_API_KEY;
 
   console.log(chalk.cyan('\n🌐 Starting ai-translate web server...\n'));
   console.log(chalk.white(`  Port:      ${port}`));
-  console.log(chalk.white(`  Ollama:    ${url}`));
+  console.log(chalk.white(`  API:       ${url}`));
   console.log(chalk.white(`  Model:     ${model}`));
+  if (apiKey) {
+    console.log(chalk.white(`  API key:   ****${apiKey.slice(-4)}`));
+  }
   console.log();
 
-  startServer(port, { ollamaUrl: url, defaultModel: model });
+  startServer(port, { ollamaUrl: url, defaultModel: model, apiKey });
 }
 
 /**
@@ -212,8 +221,9 @@ export function run(): void {
     .option('-o, --output <path>', 'Output file path')
     .option('-l, --lang <target>', 'Target language (required)')
     .option('-s, --source <lang>', 'Source language (default: auto-detect)')
-    .option('-m, --model <model>', 'Ollama model name', DEFAULT_MODEL)
-    .option('-u, --url <url>', 'Ollama API URL', OLLAMA_DEFAULT_URL)
+    .option('-m, --model <model>', 'Model name', DEFAULT_MODEL)
+    .option('-u, --url <url>', 'API base URL', OLLAMA_DEFAULT_URL)
+    .option('-k, --api-key <key>', 'API key (or set OPENAI_API_KEY env)', DEFAULT_API_KEY)
     .option('-c, --chunk-size <n>', 'Max chars per translation chunk', String(DEFAULT_CHUNK_SIZE))
     .option('-f, --force', 'Overwrite output file if exists')
     .option('--dry-run', 'Show what would be translated without translating')
@@ -225,8 +235,9 @@ export function run(): void {
     .command('web')
     .description('Start web server for browser-based translation')
     .option('-p, --port <port>', 'Server port', String(DEFAULT_PORT))
-    .option('-u, --url <url>', 'Ollama API URL', OLLAMA_DEFAULT_URL)
-    .option('-m, --model <model>', 'Default Ollama model', DEFAULT_MODEL)
+    .option('-u, --url <url>', 'API base URL', OLLAMA_DEFAULT_URL)
+    .option('-m, --model <model>', 'Default model', DEFAULT_MODEL)
+    .option('-k, --api-key <key>', 'API key (or set OPENAI_API_KEY env)', DEFAULT_API_KEY)
     .action(webCommand);
 
   program.parse();

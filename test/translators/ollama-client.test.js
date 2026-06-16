@@ -13,15 +13,18 @@ describe('OllamaClient', () => {
     it('should use default options', () => {
       expect(client.baseUrl).toBe(OLLAMA_DEFAULT_URL);
       expect(client.model).toBe(DEFAULT_MODEL);
+      expect(client.apiKey).toBe('');
     });
 
     it('should accept custom options', () => {
       const custom = new OllamaClient({
         baseUrl: 'http://custom:1234',
         model: 'mistral',
+        apiKey: 'sk-test-key',
       });
       expect(custom.baseUrl).toBe('http://custom:1234');
       expect(custom.model).toBe('mistral');
+      expect(custom.apiKey).toBe('sk-test-key');
     });
   });
 
@@ -63,46 +66,76 @@ describe('OllamaClient', () => {
   });
 
   describe('checkAvailable', () => {
-    it('should return true when Ollama is running', async () => {
+    it('should return true when API is running', async () => {
       const mockClient = new OllamaClient();
       mockClient._fetch = vi.fn().mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve({ models: [] }),
+        json: () => Promise.resolve({ data: [] }),
       });
       const result = await mockClient.checkAvailable();
       expect(result).toBe(true);
     });
 
-    it('should return false when Ollama is not running', async () => {
+    it('should return false when API is not running', async () => {
       const mockClient = new OllamaClient();
       mockClient._fetch = vi.fn().mockRejectedValue(new Error('Connection refused'));
       const result = await mockClient.checkAvailable();
       expect(result).toBe(false);
     });
+
+    it('should send Authorization header when apiKey is set', async () => {
+      const mockClient = new OllamaClient({ apiKey: 'sk-test' });
+      let calledUrl = '';
+      let calledHeaders = {};
+      mockClient._fetch = vi.fn().mockImplementation(async (url, opts) => {
+        calledUrl = url;
+        calledHeaders = opts?.headers || {};
+        return { ok: true };
+      });
+      await mockClient.checkAvailable();
+      expect(calledUrl).toContain('/v1/models');
+      expect(calledHeaders).toHaveProperty('Authorization', 'Bearer sk-test');
+    });
+  });
+
+  describe('listModels', () => {
+    it('should return model IDs from /v1/models', async () => {
+      const mockClient = new OllamaClient();
+      mockClient._fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          data: [
+            { id: 'llama3.1' },
+            { id: 'mistral' },
+          ],
+        }),
+      });
+      const models = await mockClient.listModels();
+      expect(models).toEqual(['llama3.1', 'mistral']);
+    });
+
+    it('should return empty array on error', async () => {
+      const mockClient = new OllamaClient();
+      mockClient._fetch = vi.fn().mockRejectedValue(new Error('Connection refused'));
+      const models = await mockClient.listModels();
+      expect(models).toEqual([]);
+    });
   });
 
   describe('translate', () => {
-    it('should call Ollama API with correct parameters', async () => {
+    it('should call OpenAI-compatible chat completions API', async () => {
       const mockClient = new OllamaClient({ model: 'test-model' });
       let calledWith = null;
 
       mockClient._fetch = vi.fn().mockImplementation(async (url, options) => {
         calledWith = { url, options };
-        // Simulate streaming response
         return {
           ok: true,
-          body: {
-            [Symbol.asyncIterator]: () => ({
-              next: () => Promise.resolve({
-                done: false,
-                value: new TextEncoder().encode(JSON.stringify({ response: 'Translated text' })),
-              }),
-            }),
-          },
+          body: null,
         };
       });
 
-      // Mock the stream processing to avoid complexity
+      // Mock the stream processing
       mockClient._processStreamResponse = vi.fn().mockResolvedValue('Translated text');
 
       const result = await mockClient.translate('Hello', {
@@ -111,6 +144,33 @@ describe('OllamaClient', () => {
       });
 
       expect(result).toBe('Translated text');
+      // Verify it calls /v1/chat/completions
+      expect(calledWith.url).toContain('/v1/chat/completions');
+      // Verify request body uses messages format
+      const body = JSON.parse(calledWith.options.body);
+      expect(body.model).toBe('test-model');
+      expect(body.messages).toBeDefined();
+      expect(body.messages[0].role).toBe('user');
+      expect(body.stream).toBe(true);
+    });
+
+    it('should send Authorization header when apiKey is set', async () => {
+      const mockClient = new OllamaClient({ model: 'test-model', apiKey: 'sk-test' });
+      let calledHeaders = {};
+
+      mockClient._fetch = vi.fn().mockImplementation(async (url, options) => {
+        calledHeaders = options?.headers || {};
+        return { ok: true };
+      });
+
+      mockClient._processStreamResponse = vi.fn().mockResolvedValue('OK');
+
+      await mockClient.translate('Hello', {
+        sourceLang: 'en',
+        targetLang: 'es',
+      });
+
+      expect(calledHeaders).toHaveProperty('Authorization', 'Bearer sk-test');
     });
 
     it('should retry on transient errors', async () => {

@@ -7,7 +7,7 @@ import fs from 'fs';
 
 import { JobQueue } from './job-queue.js';
 import { runTranslation } from './pipeline.js';
-import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_PORT } from '../utils/constants.js';
+import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_PORT, DEFAULT_API_KEY } from '../utils/constants.js';
 import type { TranslationJob } from '../types.js';
 
 // Storage config
@@ -43,7 +43,7 @@ const wsClients: Set<WSClient> = new Set();
 /**
  * Create and configure the Express app + WebSocket server.
  */
-export function createApp(options?: { ollamaUrl?: string; defaultModel?: string }): {
+export function createApp(options?: { ollamaUrl?: string; defaultModel?: string; apiKey?: string }): {
   app: express.Application;
   server: http.Server;
   jobQueue: JobQueue;
@@ -52,6 +52,7 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string 
   const server = http.createServer(app);
   const ollamaUrl = options?.ollamaUrl || OLLAMA_DEFAULT_URL;
   const defaultModel = options?.defaultModel || DEFAULT_MODEL;
+  const apiKey = options?.apiKey || DEFAULT_API_KEY;
 
   // Job queue with WebSocket broadcast
   const jobQueue = new JobQueue((job) => {
@@ -135,7 +136,7 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string 
       });
 
       // Start translation in background
-      runTranslation(job, jobQueue, { ollamaUrl }).catch(() => {
+      runTranslation(job, jobQueue, { ollamaUrl, apiKey }).catch(() => {
         // Error is already handled inside runTranslation
       });
 
@@ -191,19 +192,23 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string 
     res.json({ deleted: true });
   });
 
-  // GET /api/models — list available Ollama models
+  // GET /api/models — list available models via OpenAI-compatible API
   app.get('/api/models', async (_req, res) => {
     try {
-      const response = await fetch(`${ollamaUrl}/api/tags`);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (apiKey) {
+        headers['Authorization'] = `Bearer ${apiKey}`;
+      }
+      const response = await fetch(`${ollamaUrl}/v1/models`, { headers });
       if (!response.ok) {
-        res.status(502).json({ error: 'Ollama not available' });
+        res.status(502).json({ error: 'API not available' });
         return;
       }
-      const data = await response.json() as { models: Array<{ name: string }> };
-      const models = data.models.map((m) => m.name);
+      const data = await response.json() as { data: Array<{ id: string }> };
+      const models = data.data.map((m) => m.id).sort();
       res.json({ models });
     } catch {
-      res.status(502).json({ error: 'Ollama not available' });
+      res.status(502).json({ error: 'API not available' });
     }
   });
 
@@ -218,7 +223,7 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string 
 /**
  * Start the web server.
  */
-export function startServer(port: number = DEFAULT_PORT, options?: { ollamaUrl?: string; defaultModel?: string }): http.Server {
+export function startServer(port: number = DEFAULT_PORT, options?: { ollamaUrl?: string; defaultModel?: string; apiKey?: string }): http.Server {
   const { server, jobQueue } = createApp(options);
 
   server.listen(port, () => {

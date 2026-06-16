@@ -17,9 +17,10 @@ import type { TranslationJob } from '../types.js';
 export async function runTranslation(
   job: TranslationJob,
   jobQueue: JobQueue,
-  options?: { ollamaUrl?: string },
+  options?: { ollamaUrl?: string; apiKey?: string },
 ): Promise<void> {
   const ollamaUrl = options?.ollamaUrl || 'http://localhost:11434';
+  const apiKey = options?.apiKey || '';
   const outputDir = JQStatic.getOutputDir();
 
   try {
@@ -46,7 +47,7 @@ export async function runTranslation(
     // ── Step 2: Translate ──────────────────────────────────────
     jobQueue.updateStatus(job.id, 'translating', 'Starting translation...', 15);
 
-    const client = new OllamaClient({ baseUrl: ollamaUrl, model: job.model });
+    const client = new OllamaClient({ baseUrl: ollamaUrl, model: job.model, apiKey });
     const orchestrator = new TranslationOrchestrator(client);
 
     // Count total text nodes for progress
