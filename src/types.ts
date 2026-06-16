@@ -21,6 +21,19 @@ export interface ContentDoc {
 }
 
 /**
+ * A binary image extracted from an EPUB or FB2 file.
+ * Used to populate the files table in the database.
+ */
+export interface ExtractedImage {
+  /** Original path within the archive (e.g. "OEBPS/images/photo.jpg" or "#cover.png") */
+  originalPath: string;
+  /** Binary content of the image */
+  data: Buffer;
+  /** MIME type (e.g. "image/jpeg", "image/png") */
+  mimeType: string;
+}
+
+/**
  * Result of parsing an EPUB or FB2 file.
  * Returned by EpubParser.parse() and Fb2Parser.parse().
  */
@@ -29,6 +42,8 @@ export interface ParsedEpub {
   metadata: BookMetadata;
   /** Ordered content documents (chapters/sections) */
   contentDocs: ContentDoc[];
+  /** Binary images extracted from the archive (path → image data) */
+  images: ExtractedImage[];
   /** Reference to the underlying AdmZip instance (EPUB only; FB2 does not have a zip) */
   _zip?: any; // AdmZip instance — typed as `any` to avoid importing adm-zip
 }
@@ -212,8 +227,8 @@ export interface Block {
   originalMd: string;
   /** Translated text content in Markdown (null until translated) */
   translatedMd: string | null;
-  /** Image data as base64 data URI (only for type="image", null otherwise) */
-  imageBase64: string | null;
+  /** Foreign key to files.id (only set for type="image", null otherwise) */
+  fileId: string | null;
   /** Original HTML tag name (e.g. "p", "h1", "img") for reassembly */
   tagName: string;
   /** Additional HTML attributes to preserve during reassembly (JSON string) */
@@ -248,4 +263,23 @@ export interface BookRecord {
   createdAt: string;
   /** Timestamp when translation was completed */
   completedAt: string | null;
+}
+
+/**
+ * A file record stored in the files table.
+ * Stores binary image data with a deterministic ID derived from the content hash.
+ */
+export interface FileRecord {
+  /** UUID v5 derived from keccak256(binary_data) */
+  id: string;
+  /** Foreign key to books.id */
+  bookId: string;
+  /** Original path in EPUB/FB2 (e.g. "OEBPS/images/photo.jpg" or "#fb2_image_1") */
+  originalPath: string;
+  /** MIME type (e.g. "image/jpeg", "image/png") */
+  mimeType: string;
+  /** Binary image data */
+  data: Buffer;
+  /** ISO timestamp when file was imported */
+  createdAt: string;
 }

@@ -2,13 +2,35 @@ import AdmZip from 'adm-zip';
 import { parse as parseHtml } from 'node-html-parser';
 import { XMLParser } from 'fast-xml-parser';
 import path from 'path';
-import type { BookMetadata, ContentDoc, ManifestItem, ParsedEpub } from '../types.js';
+import type { BookMetadata, ContentDoc, ExtractedImage, ManifestItem, ParsedEpub } from '../types.js';
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
   trimValues: true,
 });
+
+/**
+ * Known image MIME types and their extensions.
+ */
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp', '.bmp', '.ico', '.tiff', '.tif']);
+
+function guessMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeMap: Record<string, string> = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+    '.ico': 'image/x-icon',
+    '.tiff': 'image/tiff',
+    '.tif': 'image/tiff',
+  };
+  return mimeMap[ext] || 'application/octet-stream';
+}
 
 /**
  * Parse an EPUB file into its constituent XHTML content documents.
@@ -19,6 +41,7 @@ export class EpubParser {
   private zip: AdmZip | null = null;
   private metadata: BookMetadata | null = null;
   private contentDocs: ContentDoc[] = [];
+  private images: ExtractedImage[] = [];
   private contentOpfPath: string | null = null;
   private manifest: Record<string, ManifestItem> = {};
   private spine: string[] = [];
@@ -31,7 +54,7 @@ export class EpubParser {
   }
 
   /**
-   * Parse the EPUB and extract all content documents.
+   * Parse the EPUB and extract all content documents and images.
    */
   async parse(): Promise<ParsedEpub> {
     this.zip = new AdmZip(this.filePath);
@@ -45,9 +68,13 @@ export class EpubParser {
     // 3. Extract content documents in spine order
     this.contentDocs = this._extractContentDocs();
 
+    // 4. Extract images from the ZIP
+    this.images = this._extractImages();
+
     return {
       metadata: this.metadata!,
       contentDocs: this.contentDocs,
+      images: this.images,
       _zip: this.zip,
     };
   }
@@ -229,5 +256,55 @@ export class EpubParser {
     }
 
     return docs;
+  }
+
+  /**
+   * Extract binary images from the EPUB ZIP archive.
+   * Only extracts files with image MIME types from the manifest.
+   * @private
+   */
+  private _extractImages(): ExtractedImage[] {
+    const images: ExtractedImage[] = [];
+    const opfDir = path.dirname(this.contentOpfPath!);
+
+    for (const [id, item] of Object.entries(this.manifest)) {
+      if (!item.mediaType.startsWith('image/')) continue;
+
+      // Resolve the image path relative to content.opf
+      const fullPath = path.posix.join(opfDir, item.href);
+      let entry = this.zip!.getEntry(fullPath);
+
+      // Try direct href
+      if (!entry) {
+        entry = this.zip!.getEntry(item.href);
+      }
+
+      if (!entry) continue;
+
+      const data = entry.getData();
+      images.push({
+        originalPath: fullPath,
+        data,
+        mimeType: item.mediaType,
+      });
+    }
+
+    // Also scan for images not in the manifest (some EPUBs are messy)
+    const knownPaths = new Set(images.map(img => img.originalPath));
+    const entries = this.zip!.getEntries();
+    for (const entry of entries) {
+      const entryPath = entry.entryName;
+      const ext = path.extname(entryPath).toLowerCase();
+      if (!IMAGE_EXTENSIONS.has(ext)) continue;
+      if (knownPaths.has(entryPath)) continue;
+
+      images.push({
+        originalPath: entryPath,
+        data: entry.getData(),
+        mimeType: guessMimeType(entryPath),
+      });
+    }
+
+    return images;
   }
 }

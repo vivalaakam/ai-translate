@@ -4,12 +4,12 @@ import fs from 'fs';
 import { v5 as uuidv5 } from 'uuid';
 import jsSha3 from 'js-sha3';
 const keccak256: (data: string | ArrayBuffer | Buffer) => string = (jsSha3 as any).keccak256;
-import type { Block, BookRecord, BlockType } from '../types.js';
+import type { Block, BookRecord, BlockType, FileRecord } from '../types.js';
 
-// UUID v5 namespace for book IDs (keccak256-based)
-const BOOK_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8'; // DNS namespace as base
-// UUID v5 namespace for block IDs (text-based)
-const BLOCK_NAMESPACE = '6ba7b811-9dad-11d1-80b4-00c04fd430c8'; // URL namespace as base
+// UUID v5 namespaces for deterministic IDs
+const BOOK_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+const BLOCK_NAMESPACE = '6ba7b811-9dad-11d1-80b4-00c04fd430c8';
+const FILE_NAMESPACE = '6ba7b812-9dad-11d1-80b4-00c04fd430c8';
 
 const DEFAULT_DB_DIR = path.join(process.cwd(), '.data');
 
@@ -31,7 +31,37 @@ export function generateBlockId(bookId: string, originalText: string): string {
 }
 
 /**
- * SQLite database manager for books and translation blocks.
+ * Generate a deterministic file ID from binary content using keccak256 → UUID v5.
+ */
+export function generateFileId(data: Buffer): string {
+  const hash = keccak256(data);
+  const hashBytes = Buffer.from(hash.slice(0, 32), 'hex');
+  const name = hashBytes.toString('hex');
+  return uuidv5(name, FILE_NAMESPACE);
+}
+
+/**
+ * Guess MIME type from file extension.
+ */
+function guessMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeMap: Record<string, string> = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+    '.ico': 'image/x-icon',
+    '.tiff': 'image/tiff',
+    '.tif': 'image/tiff',
+  };
+  return mimeMap[ext] || 'application/octet-stream';
+}
+
+/**
+ * SQLite database manager for books, blocks, and files.
  */
 export class TranslateDb {
   private db: Database.Database;
@@ -74,21 +104,43 @@ export class TranslateDb {
         type TEXT NOT NULL,
         original_md TEXT NOT NULL DEFAULT '',
         translated_md TEXT,
-        image_base64 TEXT,
+        file_id TEXT,
         tag_name TEXT NOT NULL DEFAULT 'p',
         attributes TEXT NOT NULL DEFAULT '{}',
+        FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+        FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS files (
+        id TEXT PRIMARY KEY,
+        book_id TEXT NOT NULL,
+        original_path TEXT NOT NULL,
+        mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+        data BLOB NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
         FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
       );
 
       CREATE INDEX IF NOT EXISTS idx_blocks_book_id ON blocks(book_id);
       CREATE INDEX IF NOT EXISTS idx_blocks_book_doc ON blocks(book_id, doc_path);
       CREATE INDEX IF NOT EXISTS idx_blocks_book_index ON blocks(book_id, block_index);
+      CREATE INDEX IF NOT EXISTS idx_blocks_file_id ON blocks(file_id);
+      CREATE INDEX IF NOT EXISTS idx_files_book_id ON files(book_id);
+      CREATE INDEX IF NOT EXISTS idx_files_original_path ON files(book_id, original_path);
     `);
+
+    // Migration: add file_id column if it doesn't exist (drop old image_base64)
+    const cols = this.db.prepare("PRAGMA table_info(blocks)").all() as { name: string }[];
+    const colNames = cols.map(c => c.name);
+    if (colNames.includes('image_base64') && !colNames.includes('file_id')) {
+      this.db.exec(`
+        ALTER TABLE blocks ADD COLUMN file_id TEXT REFERENCES files(id) ON DELETE SET NULL;
+      `);
+    }
   }
 
-  /**
-   * Insert a new book record.
-   */
+  // ─── Book CRUD ─────────────────────────────────────────────
+
   insertBook(book: Partial<Omit<BookRecord, 'createdAt' | 'completedAt' | 'translatedBlocks'>> & { id: string; title: string; author: string; language: string; filename: string; totalBlocks: number; translatedBlocks?: number }): void {
     this.db.prepare(`
       INSERT INTO books (id, title, author, language, filename, total_blocks, translated_blocks, target_lang, source_lang, model)
@@ -107,49 +159,47 @@ export class TranslateDb {
     });
   }
 
-  /**
-   * Get a book record by ID.
-   */
   getBook(id: string): BookRecord | undefined {
     const row = this.db.prepare('SELECT * FROM books WHERE id = ?').get(id) as Record<string, any> | undefined;
     if (!row) return undefined;
     return this.mapBookRow(row);
   }
 
-  /**
-   * Update a book's translation progress.
-   */
   updateBookProgress(bookId: string, translatedBlocks: number): void {
     this.db.prepare(`
       UPDATE books SET translated_blocks = ? WHERE id = ?
     `).run(translatedBlocks, bookId);
   }
 
-  /**
-   * Mark a book's translation as completed.
-   */
   completeBook(bookId: string): void {
     this.db.prepare(`
       UPDATE books SET completed_at = datetime('now'), translated_blocks = total_blocks WHERE id = ?
     `).run(bookId);
   }
 
-  /**
-   * Set target/source language and model on a book.
-   */
   setBookTranslationConfig(bookId: string, targetLang: string, sourceLang: string, model: string): void {
     this.db.prepare(`
       UPDATE books SET target_lang = ?, source_lang = ?, model = ? WHERE id = ?
     `).run(targetLang, sourceLang, model, bookId);
   }
 
-  /**
-   * Insert blocks in bulk (within a transaction).
-   */
+  listBooks(): BookRecord[] {
+    const rows = this.db.prepare('SELECT * FROM books ORDER BY created_at DESC').all() as Record<string, any>[];
+    return rows.map(this.mapBookRow);
+  }
+
+  deleteBook(bookId: string): void {
+    this.db.prepare('DELETE FROM blocks WHERE book_id = ?').run(bookId);
+    this.db.prepare('DELETE FROM files WHERE book_id = ?').run(bookId);
+    this.db.prepare('DELETE FROM books WHERE id = ?').run(bookId);
+  }
+
+  // ─── Block CRUD ────────────────────────────────────────────
+
   insertBlocks(blocks: Block[]): void {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO blocks (id, book_id, block_index, doc_path, type, original_md, translated_md, image_base64, tag_name, attributes)
-      VALUES (@id, @bookId, @blockIndex, @docPath, @type, @originalMd, @translatedMd, @imageBase64, @tagName, @attributes)
+      INSERT OR REPLACE INTO blocks (id, book_id, block_index, doc_path, type, original_md, translated_md, file_id, tag_name, attributes)
+      VALUES (@id, @bookId, @blockIndex, @docPath, @type, @originalMd, @translatedMd, @fileId, @tagName, @attributes)
     `);
 
     const insertMany = this.db.transaction((items: Block[]) => {
@@ -162,7 +212,7 @@ export class TranslateDb {
           type: b.type,
           originalMd: b.originalMd,
           translatedMd: b.translatedMd,
-          imageBase64: b.imageBase64,
+          fileId: b.fileId,
           tagName: b.tagName,
           attributes: b.attributes,
         });
@@ -172,9 +222,6 @@ export class TranslateDb {
     insertMany(blocks);
   }
 
-  /**
-   * Get all blocks for a book, ordered by index.
-   */
   getBlocksByBook(bookId: string): Block[] {
     const rows = this.db.prepare(
       'SELECT * FROM blocks WHERE book_id = ? ORDER BY block_index'
@@ -182,9 +229,6 @@ export class TranslateDb {
     return rows.map(this.mapBlockRow);
   }
 
-  /**
-   * Get blocks for a specific content document.
-   */
   getBlocksByDoc(bookId: string, docPath: string): Block[] {
     const rows = this.db.prepare(
       'SELECT * FROM blocks WHERE book_id = ? AND doc_path = ? ORDER BY block_index'
@@ -192,9 +236,6 @@ export class TranslateDb {
     return rows.map(this.mapBlockRow);
   }
 
-  /**
-   * Get blocks that haven't been translated yet.
-   */
   getUntranslatedBlocks(bookId: string): Block[] {
     const rows = this.db.prepare(
       "SELECT * FROM blocks WHERE book_id = ? AND translated_md IS NULL AND type != 'image' ORDER BY block_index"
@@ -202,9 +243,6 @@ export class TranslateDb {
     return rows.map(this.mapBlockRow);
   }
 
-  /**
-   * Get translated blocks for a book.
-   */
   getTranslatedBlocks(bookId: string): Block[] {
     const rows = this.db.prepare(
       'SELECT * FROM blocks WHERE book_id = ? AND translated_md IS NOT NULL ORDER BY block_index'
@@ -212,18 +250,12 @@ export class TranslateDb {
     return rows.map(this.mapBlockRow);
   }
 
-  /**
-   * Update a single block's translation.
-   */
   updateBlockTranslation(blockId: string, translatedMd: string): void {
     this.db.prepare(`
       UPDATE blocks SET translated_md = ? WHERE id = ?
     `).run(translatedMd, blockId);
   }
 
-  /**
-   * Count blocks for a book.
-   */
   countBlocks(bookId: string): { total: number; translated: number } {
     const row = this.db.prepare(`
       SELECT
@@ -234,9 +266,6 @@ export class TranslateDb {
     return { total: row.total, translated: row.translated ?? 0 };
   }
 
-  /**
-   * Get all distinct doc paths for a book.
-   */
   getDocPaths(bookId: string): string[] {
     const rows = this.db.prepare(
       'SELECT DISTINCT doc_path FROM blocks WHERE book_id = ? ORDER BY doc_path'
@@ -244,35 +273,99 @@ export class TranslateDb {
     return rows.map(r => r.doc_path);
   }
 
+  // ─── File CRUD ─────────────────────────────────────────────
+
   /**
-   * Delete a book and all its blocks.
+   * Insert a file record. If a file with the same id already exists, it is replaced.
+   * The id is derived from keccak256 of the binary data — deduplication by content.
    */
-  deleteBook(bookId: string): void {
-    this.db.prepare('DELETE FROM blocks WHERE book_id = ?').run(bookId);
-    this.db.prepare('DELETE FROM books WHERE id = ?').run(bookId);
+  insertFile(file: FileRecord): void {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO files (id, book_id, original_path, mime_type, data, created_at)
+      VALUES (@id, @bookId, @originalPath, @mimeType, @data, @createdAt)
+    `).run({
+      id: file.id,
+      bookId: file.bookId,
+      originalPath: file.originalPath,
+      mimeType: file.mimeType,
+      data: file.data,
+      createdAt: file.createdAt,
+    });
   }
 
   /**
-   * List all books.
+   * Insert multiple file records in a transaction.
    */
-  listBooks(): BookRecord[] {
-    const rows = this.db.prepare('SELECT * FROM books ORDER BY created_at DESC').all() as Record<string, any>[];
-    return rows.map(this.mapBookRow);
+  insertFiles(files: FileRecord[]): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO files (id, book_id, original_path, mime_type, data, created_at)
+      VALUES (@id, @bookId, @originalPath, @mimeType, @data, @createdAt)
+    `);
+
+    const insertMany = this.db.transaction((items: FileRecord[]) => {
+      for (const f of items) {
+        stmt.run({
+          id: f.id,
+          bookId: f.bookId,
+          originalPath: f.originalPath,
+          mimeType: f.mimeType,
+          data: f.data,
+          createdAt: f.createdAt,
+        });
+      }
+    });
+
+    insertMany(files);
   }
 
   /**
-   * Close the database connection.
+   * Get a file record by ID (without binary data for metadata queries).
    */
+  getFile(id: string): FileRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM files WHERE id = ?').get(id) as Record<string, any> | undefined;
+    if (!row) return undefined;
+    return this.mapFileRow(row);
+  }
+
+  /**
+   * Get a file record by book ID and original path.
+   */
+  getFileByPath(bookId: string, originalPath: string): FileRecord | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM files WHERE book_id = ? AND original_path = ?'
+    ).get(bookId, originalPath) as Record<string, any> | undefined;
+    if (!row) return undefined;
+    return this.mapFileRow(row);
+  }
+
+  /**
+   * Get all files for a book.
+   */
+  getFilesByBook(bookId: string): FileRecord[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM files WHERE book_id = ?'
+    ).all(bookId) as Record<string, any>[];
+    return rows.map(this.mapFileRow);
+  }
+
+  /**
+   * Delete all files for a book.
+   */
+  deleteFilesByBook(bookId: string): void {
+    this.db.prepare('DELETE FROM files WHERE book_id = ?').run(bookId);
+  }
+
+  // ─── General ───────────────────────────────────────────────
+
   close(): void {
     this.db.close();
   }
 
-  /**
-   * Get the raw better-sqlite3 instance (for advanced use).
-   */
   get raw(): Database.Database {
     return this.db;
   }
+
+  // ─── Private helpers ──────────────────────────────────────
 
   private mapBookRow(row: Record<string, any>): BookRecord {
     return {
@@ -300,9 +393,20 @@ export class TranslateDb {
       type: row.type as BlockType,
       originalMd: row.original_md,
       translatedMd: row.translated_md,
-      imageBase64: row.image_base64,
+      fileId: row.file_id,
       tagName: row.tag_name,
       attributes: row.attributes,
+    };
+  }
+
+  private mapFileRow(row: Record<string, any>): FileRecord {
+    return {
+      id: row.id,
+      bookId: row.book_id,
+      originalPath: row.original_path,
+      mimeType: row.mime_type,
+      data: row.data, // Buffer from BLOB
+      createdAt: row.created_at,
     };
   }
 }

@@ -144,7 +144,7 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
 
     // Extract blocks and store in DB
     spinner.start('Extracting blocks...');
-    const blocks = extractAllBlocks(parsed.contentDocs, bookId);
+    const { blocks, files } = extractAllBlocks(parsed.contentDocs, bookId, parsed.images);
 
     // Insert or update book record
     const existingBook = db.getBook(bookId);
@@ -164,12 +164,17 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
       db.setBookTranslationConfig(bookId, targetLang, sourceLang, model);
     }
 
+    // Store image files
+    if (files.length > 0) {
+      db.insertFiles(files);
+    }
+
     db.insertBlocks(blocks);
-    spinner.succeed(`Extracted ${blocks.length} blocks`);
+    spinner.succeed(`Extracted ${blocks.length} blocks, ${files.length} images`);
 
     // Skip image blocks for translation count
     const translatableBlocks = blocks.filter(b => b.type !== 'image');
-    console.log(chalk.white(`  Total blocks: ${blocks.length} (translatable: ${translatableBlocks})`));
+    console.log(chalk.white(`  Total blocks: ${blocks.length} (translatable: ${translatableBlocks.length})`));
 
     if (dryRun) {
       console.log(chalk.yellow('\n--dry-run mode: no translation performed.'));

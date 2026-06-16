@@ -123,6 +123,32 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
   app.use(express.json());
   app.use(express.static(path.join(import.meta.dirname, 'public')));
 
+  // ─── File serving endpoint ───────────────────────────────────
+
+  /**
+   * GET /files/:id — Serve a binary image from the files table.
+   * Used by book detail pages and assembled EPUBs to resolve file:ID references.
+   */
+  app.get('/files/:id', async (req, res): Promise<void> => {
+    const { TranslateDb } = await import('../db/database.js');
+    const db = new TranslateDb(dbPath);
+    try {
+      const file = db.getFile(req.params.id);
+      if (!file) {
+        res.status(404).json({ error: 'File not found' });
+        return;
+      }
+      res.setHeader('Content-Type', file.mimeType);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); // content-addressed — never changes
+      res.setHeader('Content-Length', file.data.length);
+      res.send(file.data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    } finally {
+      db.close();
+    }
+  });
+
   // ─── JSON-RPC endpoint ─────────────────────────────────────────
 
   /**

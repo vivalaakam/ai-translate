@@ -1,5 +1,6 @@
 import MarkdownIt from 'markdown-it';
 import type { Block } from '../types.js';
+import type { TranslateDb } from '../db/database.js';
 
 const md = new MarkdownIt({
   html: true,
@@ -35,8 +36,11 @@ function headingLevel(mdText: string): string {
 /**
  * Convert a single Block back to an HTML string.
  * Uses translatedMd if available, falls back to originalMd.
+ *
+ * For image blocks, resolves file:ID references to actual URLs
+ * using the database files table.
  */
-export function blockToHtml(block: Block): string {
+export function blockToHtml(block: Block, db?: TranslateDb, bookId?: string): string {
   const mdText = block.translatedMd ?? block.originalMd;
   let tagName = block.tagName || TYPE_TO_TAG[block.type] || 'p';
 
@@ -45,22 +49,38 @@ export function blockToHtml(block: Block): string {
     tagName = headingLevel(mdText);
   }
 
-  // Parse Markdown → HTML
-  let htmlContent = md.render(mdText).trim();
-
-  // md.render wraps in <p> tags — strip the outer <p> if our target tag isn't <p>
-  if (tagName !== 'p' && htmlContent.startsWith('<p>') && htmlContent.endsWith('</p>')) {
-    htmlContent = htmlContent.slice(3, -4).trim();
-  }
-
-  // For images, the Markdown renders as <img> already — wrap appropriately
+  // For image blocks, resolve file:ID references
   if (block.type === 'image') {
+    let resolvedMd = mdText;
+
+    // Replace file:ID references with actual serving URLs
+    resolvedMd = resolvedMd.replace(/!\[([^\]]*)\]\(file:([^)]+)\)/g, (_match, alt, fileId) => {
+      // Serve files via the web API
+      return `![${alt}](/rpc/file/${fileId})`;
+    });
+
+    // Parse Markdown → HTML for the image
+    let htmlContent = md.render(resolvedMd).trim();
+
+    // md.render wraps in <p> tags — strip if our target is <p>
+    if (tagName !== 'p' && htmlContent.startsWith('<p>') && htmlContent.endsWith('</p>')) {
+      htmlContent = htmlContent.slice(3, -4).trim();
+    }
+
     const attrs = parseAttributes(block.attributes);
     if (attrs.class || attrs.style) {
       const attrStr = formatAttrs(attrs);
       return `<p${attrStr}>${htmlContent}</p>`;
     }
     return `<p>${htmlContent}</p>`;
+  }
+
+  // Parse Markdown → HTML
+  let htmlContent = md.render(mdText).trim();
+
+  // md.render wraps in <p> tags — strip the outer <p> if our target tag isn't <p>
+  if (tagName !== 'p' && htmlContent.startsWith('<p>') && htmlContent.endsWith('</p>')) {
+    htmlContent = htmlContent.slice(3, -4).trim();
   }
 
   // For list items, Markdown renders as <li> already
@@ -93,9 +113,11 @@ export function blockToHtml(block: Block): string {
 /**
  * Reassemble a content document's HTML from its blocks.
  * Produces a complete XHTML body content.
+ *
+ * For image blocks, resolves file:ID references to actual content.
  */
-export function assembleDocHtml(blocks: Block[]): string {
-  const parts = blocks.map(blockToHtml);
+export function assembleDocHtml(blocks: Block[], db?: TranslateDb, bookId?: string): string {
+  const parts = blocks.map(b => blockToHtml(b, db, bookId));
   return parts.join('\n');
 }
 
@@ -103,8 +125,8 @@ export function assembleDocHtml(blocks: Block[]): string {
  * Reassemble a full XHTML document for a content doc.
  * Wraps the block HTML in a proper XHTML template.
  */
-export function assembleXhtmlDoc(blocks: Block[], docPath: string): string {
-  const bodyContent = assembleDocHtml(blocks);
+export function assembleXhtmlDoc(blocks: Block[], docPath: string, db?: TranslateDb, bookId?: string): string {
+  const bodyContent = assembleDocHtml(blocks, db, bookId);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">

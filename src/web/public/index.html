@@ -560,6 +560,12 @@
         <h3 style="font-size:16px;font-weight:600;margin-bottom:8px">📑 Chapters</h3>
         <div class="chapters-list" id="chaptersList"></div>
       </div>
+
+      <!-- Images gallery -->
+      <div class="detail-card" id="imagesCard" style="display:none">
+        <h3 style="font-size:16px;font-weight:600;margin-bottom:8px">🖼️ Images</h3>
+        <div class="images-grid" id="imagesGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-top:8px"></div>
+      </div>
     </div>
   </div>
 
@@ -960,6 +966,25 @@
           }).join('');
         } else {
           chaptersCard.style.display = 'none';
+        }
+
+        // Images gallery
+        const images = book.images || [];
+        const imagesCard = document.getElementById('imagesCard');
+        const imagesGrid = document.getElementById('imagesGrid');
+        if (images.length > 0) {
+          imagesCard.style.display = '';
+          imagesGrid.innerHTML = images.map(img => {
+            const sizeKB = (img.size / 1024).toFixed(1);
+            return `<div style="text-align:center">
+              <img src="${img.url}" alt="${escapeHtml(img.originalPath)}" 
+                   style="max-width:100%;max-height:100px;border-radius:4px;object-fit:contain;background:var(--surface2);padding:4px" 
+                   loading="lazy" onerror="this.style.display='none'">
+              <div style="font-size:11px;color:var(--text2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${sizeKB}KB</div>
+            </div>`;
+          }).join('');
+        } else {
+          imagesCard.style.display = 'none';
         }
 
       } catch (err) {

@@ -58,10 +58,10 @@ export async function runUpload(
       throw new Error(`Unsupported file format: ${ext}`);
     }
 
-    // ── Extract blocks ──────────────────────────────────────
+    // ── Extract blocks + images ──────────────────────────────
     jobQueue.updateStatus(job.id, 'parsing', 'Extracting blocks...', 30);
 
-    const blocks = extractAllBlocks(parsed.contentDocs, bookId);
+    const { blocks, files } = extractAllBlocks(parsed.contentDocs, bookId, parsed.images);
 
     // Store book record
     db.insertBook({
@@ -73,12 +73,17 @@ export async function runUpload(
       totalBlocks: blocks.length,
     });
 
+    // Store image files
+    if (files.length > 0) {
+      db.insertFiles(files);
+    }
+
     // Store blocks
     db.insertBlocks(blocks);
 
     // Store metadata on job
     jobQueue.setMetadata(job.id, parsed.metadata);
-    jobQueue.updateStatus(job.id, 'completed', `Parsed: "${parsed.metadata.title}" — ${blocks.length} blocks`, 100);
+    jobQueue.updateStatus(job.id, 'completed', `Parsed: "${parsed.metadata.title}" — ${blocks.length} blocks, ${files.length} images`, 100);
 
     return db.getBook(bookId)!;
   } catch (err: any) {
@@ -151,10 +156,10 @@ export async function runTranslation(
       throw new Error(`Unsupported file format: ${ext}`);
     }
 
-    // ── Step 2: Extract blocks ────────────────────────────────
+    // ── Step 2: Extract blocks + images ────────────────────────
     jobQueue.updateStatus(job.id, 'parsing', 'Extracting blocks...', 8);
 
-    const blocks = extractAllBlocks(parsed.contentDocs, bookId);
+    const { blocks, files } = extractAllBlocks(parsed.contentDocs, bookId, parsed.images);
 
     // Store book record
     if (!existingBook) {
@@ -173,12 +178,17 @@ export async function runTranslation(
       db.setBookTranslationConfig(bookId, job.targetLang, job.sourceLang, job.model);
     }
 
+    // Store image files
+    if (files.length > 0) {
+      db.insertFiles(files);
+    }
+
     // Store blocks
     db.insertBlocks(blocks);
 
     // Store metadata on job
     jobQueue.setMetadata(job.id, parsed.metadata);
-    jobQueue.updateStatus(job.id, 'parsing', `Parsed: "${parsed.metadata.title}" — ${blocks.length} blocks`, 10);
+    jobQueue.updateStatus(job.id, 'parsing', `Parsed: "${parsed.metadata.title}" — ${blocks.length} blocks, ${files.length} images`, 10);
 
     // ── Step 3: Translate blocks ──────────────────────────────
     jobQueue.updateStatus(job.id, 'translating', 'Starting block-by-block translation...', 12);
@@ -236,7 +246,7 @@ export async function runTranslation(
     const docPaths = db.getDocPaths(bookId);
     for (const docPath of docPaths) {
       const docBlocks = db.getBlocksByDoc(bookId, docPath);
-      const html = assembleDocHtml(docBlocks);
+      const html = assembleDocHtml(docBlocks, db, bookId);
       writer.updateContentDoc(docPath, html);
     }
 

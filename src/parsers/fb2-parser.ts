@@ -1,7 +1,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import { parse as parseHtml } from 'node-html-parser';
 import fs from 'fs';
-import type { BookMetadata, ContentDoc, ParsedEpub } from '../types.js';
+import type { BookMetadata, ContentDoc, ExtractedImage, ParsedEpub } from '../types.js';
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -17,6 +17,7 @@ export class Fb2Parser {
   private filePath: string;
   private metadata: BookMetadata | null = null;
   private contentDocs: ContentDoc[] = [];
+  private images: ExtractedImage[] = [];
   private rawXml: string | null = null;
   private parsedXml: Record<string, any> | null = null;
 
@@ -36,10 +37,12 @@ export class Fb2Parser {
 
     this._extractMetadata();
     this.contentDocs = this._extractContentDocs();
+    this.images = this._extractImages();
 
     return {
       metadata: this.metadata!,
       contentDocs: this.contentDocs,
+      images: this.images,
     };
   }
 
@@ -114,6 +117,56 @@ export class Fb2Parser {
     }
 
     return docs;
+  }
+
+  /**
+   * Extract binary images from FB2 <binary> elements.
+   * FB2 stores images as base64-encoded data in <binary id="..." content-type="..."> elements.
+   * @private
+   */
+  private _extractImages(): ExtractedImage[] {
+    const images: ExtractedImage[] = [];
+    const fb = this.parsedXml?.FictionBook;
+    if (!fb) return images;
+
+    // <binary> elements can be a single object or an array
+    const binaries = this._asArray(fb.binary || []);
+
+    for (const bin of binaries) {
+      if (!bin) continue;
+
+      const id = bin['@_id'] || '';
+      const contentType = bin['@_content-type'] || 'image/jpeg';
+      // The base64 data can be in #text or as a string directly
+      const base64Data = typeof bin === 'string' ? bin : (bin['#text'] || bin['@_value'] || '');
+
+      if (!id || !base64Data) continue;
+
+      try {
+        const data = Buffer.from(base64Data.trim(), 'base64');
+        // Determine file extension from content type
+        const extMap: Record<string, string> = {
+          'image/jpeg': '.jpg',
+          'image/png': '.png',
+          'image/gif': '.gif',
+          'image/svg+xml': '.svg',
+          'image/webp': '.webp',
+        };
+        const ext = extMap[contentType] || '.jpg';
+        // Use #id as the path (FB2 references images via xlink:href="#id")
+        const originalPath = `#${id}${ext}`;
+
+        images.push({
+          originalPath,
+          data,
+          mimeType: contentType,
+        });
+      } catch {
+        // Skip invalid base64 data
+      }
+    }
+
+    return images;
   }
 
   /**
@@ -205,6 +258,14 @@ ${titleHtml}${bodyContent}
     if (tagName === 'section') {
       const inner = this._convertSection(value);
       return `<div class="section">\n${inner}</div>\n`;
+    }
+
+    // Handle <image> elements in FB2 — convert to <img> with xlink:href
+    if (tagName === 'image') {
+      const href = value?.['@_xlink:href'] || value?.['@_href'] || '';
+      const src = href.startsWith('#') ? href : `#${href}`;
+      const alt = value?.['@_alt'] || value?.['@_title'] || '';
+      return `<img src="${this._escapeHtml(src)}" alt="${this._escapeHtml(alt)}"/>\n`;
     }
 
     // Get text content

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { TranslateDb, generateBookId, generateBlockId } from '../../src/db/database.js';
+import { TranslateDb, generateBookId, generateBlockId, generateFileId } from '../../src/db/database.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -23,6 +23,7 @@ describe('TranslateDb', () => {
     const names = tables.map(t => t.name);
     expect(names).toContain('books');
     expect(names).toContain('blocks');
+    expect(names).toContain('files');
   });
 
   it('should insert and retrieve a book', () => {
@@ -72,7 +73,7 @@ describe('TranslateDb', () => {
         type: 'paragraph',
         originalMd: 'Hello world',
         translatedMd: null,
-        imageBase64: null,
+        fileId: null,
         tagName: 'p',
         attributes: '{}',
       },
@@ -84,7 +85,7 @@ describe('TranslateDb', () => {
         type: 'heading',
         originalMd: '## Chapter 1',
         translatedMd: null,
-        imageBase64: null,
+        fileId: null,
         tagName: 'h2',
         attributes: '{}',
       },
@@ -125,10 +126,11 @@ describe('TranslateDb', () => {
     expect(paths).toContain('OEBPS/chapter1.xhtml');
   });
 
-  it('should delete a book and its blocks', () => {
+  it('should delete a book and its blocks and files', () => {
     db.deleteBook('book-1');
     expect(db.getBook('book-1')).toBeUndefined();
     expect(db.getBlocksByBook('book-1').length).toBe(0);
+    expect(db.getFilesByBook('book-1').length).toBe(0);
   });
 
   it('should list books', () => {
@@ -142,6 +144,147 @@ describe('TranslateDb', () => {
     });
     const books = db.listBooks();
     expect(books.length).toBeGreaterThan(0);
+  });
+});
+
+describe('FileRecord CRUD', () => {
+  let fileDb;
+  let fileTmpDir;
+
+  beforeAll(() => {
+    fileTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-translate-files-'));
+    fileDb = new TranslateDb(path.join(fileTmpDir, 'files-test.db'));
+    fileDb.insertBook({
+      id: 'book-files',
+      title: 'Files Test Book',
+      author: 'Test',
+      language: 'en',
+      filename: 'images.epub',
+      totalBlocks: 1,
+    });
+  });
+
+  afterAll(() => {
+    fileDb.close();
+    fs.rmSync(fileTmpDir, { recursive: true });
+  });
+
+  it('should insert and retrieve a file', () => {
+    const imageData = Buffer.from('fake-image-data');
+    const fileId = generateFileId(imageData);
+
+    fileDb.insertFile({
+      id: fileId,
+      bookId: 'book-files',
+      originalPath: 'OEBPS/images/photo.jpg',
+      mimeType: 'image/jpeg',
+      data: imageData,
+      createdAt: new Date().toISOString(),
+    });
+
+    const file = fileDb.getFile(fileId);
+    expect(file).toBeDefined();
+    expect(file.id).toBe(fileId);
+    expect(file.originalPath).toBe('OEBPS/images/photo.jpg');
+    expect(file.mimeType).toBe('image/jpeg');
+    expect(file.data).toBeInstanceOf(Buffer);
+    expect(file.data.length).toBe(imageData.length);
+  });
+
+  it('should get file by path', () => {
+    const imageData = Buffer.from('another-image');
+    const fileId = generateFileId(imageData);
+
+    fileDb.insertFile({
+      id: fileId,
+      bookId: 'book-files',
+      originalPath: 'OEBPS/images/cover.png',
+      mimeType: 'image/png',
+      data: imageData,
+      createdAt: new Date().toISOString(),
+    });
+
+    const file = fileDb.getFileByPath('book-files', 'OEBPS/images/cover.png');
+    expect(file).toBeDefined();
+    expect(file.mimeType).toBe('image/png');
+  });
+
+  it('should get all files for a book', () => {
+    const files = fileDb.getFilesByBook('book-files');
+    expect(files.length).toBe(2);
+  });
+
+  it('should insert multiple files at once', () => {
+    const files = [
+      {
+        id: generateFileId(Buffer.from('img-data-1')),
+        bookId: 'book-files',
+        originalPath: 'OEBPS/images/batch1.jpg',
+        mimeType: 'image/jpeg',
+        data: Buffer.from('img-data-1'),
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: generateFileId(Buffer.from('img-data-2')),
+        bookId: 'book-files',
+        originalPath: 'OEBPS/images/batch2.png',
+        mimeType: 'image/png',
+        data: Buffer.from('img-data-2'),
+        createdAt: new Date().toISOString(),
+      },
+    ];
+
+    fileDb.insertFiles(files);
+    const allFiles = fileDb.getFilesByBook('book-files');
+    expect(allFiles.length).toBe(4); // 2 from before + 2 new
+  });
+
+  it('should generate deterministic file IDs from content hash', () => {
+    const data = Buffer.from('deterministic-content');
+    const id1 = generateFileId(data);
+    const id2 = generateFileId(data);
+    expect(id1).toBe(id2);
+    expect(id1).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('should generate different file IDs for different content', () => {
+    const id1 = generateFileId(Buffer.from('content A'));
+    const id2 = generateFileId(Buffer.from('content B'));
+    expect(id1).not.toBe(id2);
+  });
+
+  it('should support blocks with fileId references', () => {
+    const imageData = Buffer.from('block-image-data');
+    const fileId = generateFileId(imageData);
+
+    fileDb.insertFile({
+      id: fileId,
+      bookId: 'book-files',
+      originalPath: 'OEBPS/images/inline.jpg',
+      mimeType: 'image/jpeg',
+      data: imageData,
+      createdAt: new Date().toISOString(),
+    });
+
+    fileDb.insertBlocks([{
+      id: 'block-img-1',
+      bookId: 'book-files',
+      index: 99,
+      docPath: 'OEBPS/chapter2.xhtml',
+      type: 'image',
+      originalMd: '![Photo](file:' + fileId + ')',
+      translatedMd: null,
+      fileId: fileId,
+      tagName: 'img',
+      attributes: '{"src": "file:' + fileId + '"}',
+    }]);
+
+    const blocks = fileDb.getBlocksByBook('book-files');
+    const imgBlock = blocks.find(b => b.id === 'block-img-1');
+    expect(imgBlock).toBeDefined();
+    expect(imgBlock.fileId).toBe(fileId);
+    expect(imgBlock.type).toBe('image');
+    expect(imgBlock.originalMd).toContain('file:' + fileId);
   });
 });
 

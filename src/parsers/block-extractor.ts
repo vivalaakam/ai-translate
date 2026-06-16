@@ -1,6 +1,6 @@
 import TurndownService from 'turndown';
-import { generateBlockId } from '../db/database.js';
-import type { Block, BlockType, ContentDoc } from '../types.js';
+import { generateBlockId, generateFileId } from '../db/database.js';
+import type { Block, BlockType, ContentDoc, ExtractedImage, FileRecord } from '../types.js';
 
 /**
  * HTML tag → BlockType mapping.
@@ -21,10 +21,20 @@ const TAG_TO_TYPE: Record<string, BlockType> = {
 const BLOCK_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'div', 'blockquote', 'pre', 'ul', 'ol', 'li', 'table', 'tr', 'img', 'figure', 'dl', 'dt', 'dd', 'hr']);
 
 /**
+ * Result of extracting blocks from a book.
+ * Includes both the text blocks and any file records for images.
+ */
+export interface ExtractionResult {
+  blocks: Block[];
+  /** File records for images that should be stored in the files table. */
+  files: FileRecord[];
+}
+
+/**
  * Extract blocks from a ContentDoc's DOM.
  * Each direct block-level child of <body> becomes one Block row.
  */
-export function extractBlocksFromDoc(doc: ContentDoc, bookId: string): Block[] {
+export function extractBlocksFromDoc(doc: ContentDoc, bookId: string, imageMap: Map<string, string>): Block[] {
   const turndown = new TurndownService({
     headingStyle: 'atx',
     codeBlockStyle: 'fenced',
@@ -44,7 +54,7 @@ export function extractBlocksFromDoc(doc: ContentDoc, bookId: string): Block[] {
     // Skip comment nodes
     if (child.nodeType === 8) continue;
 
-    const block = extractBlock(child, bookId, doc.path, blockIndex, turndown);
+    const block = extractBlock(child, bookId, doc.path, blockIndex, turndown, imageMap);
     if (block) {
       blocks.push(block);
       blockIndex++;
@@ -57,7 +67,7 @@ export function extractBlocksFromDoc(doc: ContentDoc, bookId: string): Block[] {
 /**
  * Extract a single block from a DOM node.
  */
-function extractBlock(node: any, bookId: string, docPath: string, index: number, turndown: TurndownService): Block | null {
+function extractBlock(node: any, bookId: string, docPath: string, index: number, turndown: TurndownService, imageMap: Map<string, string>): Block | null {
   // Get tag name (lowercase), default to 'div' for non-element nodes
   const tagName = node.tagName ? node.tagName.toLowerCase() : 'div';
 
@@ -71,14 +81,17 @@ function extractBlock(node: any, bookId: string, docPath: string, index: number,
   if (type === 'image' || tagName === 'img' || tagName === 'image') {
     const src = node.getAttribute('src') || node.getAttribute('xlink:href') || '';
     const alt = node.getAttribute('alt') || node.getAttribute('title') || '';
-    let imageBase64: string | null = null;
 
-    // If the src is a data URI, store it
-    if (src.startsWith('data:')) {
-      imageBase64 = src;
+    // Look up the file ID from the image map
+    let fileId: string | null = null;
+    const resolvedSrc = resolveImageSrc(src, imageMap);
+    if (resolvedSrc) {
+      fileId = resolvedSrc;
     }
 
-    const originalMd = alt ? `![${alt}](${src})` : `![](${src})`;
+    // Use file:ID reference in markdown so we can resolve it later
+    const mdSrc = fileId ? `file:${fileId}` : src;
+    const originalMd = alt ? `![${alt}](${mdSrc})` : `![](${mdSrc})`;
     const blockId = generateBlockId(bookId, originalMd);
 
     return {
@@ -89,13 +102,13 @@ function extractBlock(node: any, bookId: string, docPath: string, index: number,
       type: 'image',
       originalMd,
       translatedMd: null,
-      imageBase64,
+      fileId,
       tagName,
       attributes,
     };
   }
 
-  // For container elements (ul, ol, div) that contain block children, flatten them
+  // For container elements (ul, ol, table, figure, div) that contain block children, flatten them
   if (['ul', 'ol', 'table', 'figure', 'div'].includes(tagName)) {
     const childBlocks: Block[] = [];
     let childIndex = index;
@@ -107,13 +120,13 @@ function extractBlock(node: any, bookId: string, docPath: string, index: number,
       const childTagName = child.tagName ? child.tagName.toLowerCase() : '';
       // Only extract block-level children, inline text goes to the parent
       if (BLOCK_TAGS.has(childTagName)) {
-        const block = extractBlock(child, bookId, docPath, childIndex, turndown);
+        const block = extractBlock(child, bookId, docPath, childIndex, turndown, imageMap);
         if (block) {
           childBlocks.push(block);
           childIndex++;
         }
       } else if (childTagName === 'li') {
-        const block = extractBlock(child, bookId, docPath, childIndex, turndown);
+        const block = extractBlock(child, bookId, docPath, childIndex, turndown, imageMap);
         if (block) {
           childBlocks.push(block);
           childIndex++;
@@ -147,10 +160,97 @@ function extractBlock(node: any, bookId: string, docPath: string, index: number,
     type,
     originalMd,
     translatedMd: null,
-    imageBase64: null,
+    fileId: null,
     tagName,
     attributes,
   };
+}
+
+/**
+ * Resolve an image src to a file ID using the image map.
+ * Tries various path resolutions to find a match.
+ */
+function resolveImageSrc(src: string, imageMap: Map<string, string>): string | null {
+  if (!src) return null;
+
+  // Direct match
+  if (imageMap.has(src)) return imageMap.get(src)!;
+
+  // Try without leading # (FB2 xlink:href)
+  if (src.startsWith('#')) {
+    const withoutHash = src.slice(1);
+    if (imageMap.has(withoutHash)) return imageMap.get(withoutHash)!;
+    // Try with extension appended (for FB2 images with #id.ext format)
+    for (const [key, id] of imageMap) {
+      if (key.startsWith('#') && key.split('.').shift() === src) return id;
+      if (key.startsWith('#' + withoutHash)) return id;
+    }
+  }
+
+  // Try common path prefixes
+  const prefixes = ['', 'OEBPS/', 'OEBPS/Images/', 'Images/', 'images/'];
+  for (const prefix of prefixes) {
+    const tryPath = prefix + src.replace(/^\.\.\//, '');
+    if (imageMap.has(tryPath)) return imageMap.get(tryPath)!;
+  }
+
+  // Try matching just the filename
+  const basename = src.split('/').pop() || '';
+  for (const [key, id] of imageMap) {
+    if (key.endsWith('/' + basename) || key === basename) return id;
+  }
+
+  return null;
+}
+
+/**
+ * Build an image map (path → fileId) from extracted images.
+ * Also returns the FileRecord array for database insertion.
+ */
+export function buildImageMap(images: ExtractedImage[], bookId: string): { imageMap: Map<string, string>; files: FileRecord[] } {
+  const imageMap = new Map<string, string>();
+  const files: FileRecord[] = [];
+  const now = new Date().toISOString();
+
+  for (const img of images) {
+    const fileId = generateFileId(img.data);
+    imageMap.set(img.originalPath, fileId);
+    files.push({
+      id: fileId,
+      bookId,
+      originalPath: img.originalPath,
+      mimeType: img.mimeType,
+      data: img.data,
+      createdAt: now,
+    });
+  }
+
+  return { imageMap, files };
+}
+
+/**
+ * Extract all blocks from a ParsedEpub's content documents.
+ * Returns both blocks and file records.
+ */
+export function extractAllBlocks(contentDocs: ContentDoc[], bookId: string, images: ExtractedImage[]): ExtractionResult {
+  // Build image path → fileId map
+  const { imageMap, files } = buildImageMap(images, bookId);
+
+  const allBlocks: Block[] = [];
+  let globalIndex = 0;
+
+  for (const doc of contentDocs) {
+    const docBlocks = extractBlocksFromDoc(doc, bookId, imageMap);
+    // Re-index globally across all docs
+    for (const block of docBlocks) {
+      block.index = globalIndex++;
+      // Re-generate ID with global index context for uniqueness
+      block.id = generateBlockId(bookId, `${block.docPath}:${globalIndex}:${block.originalMd}`);
+      allBlocks.push(block);
+    }
+  }
+
+  return { blocks: allBlocks, files };
 }
 
 /**
@@ -193,25 +293,4 @@ function extractAttributes(node: any): string {
     }
   }
   return JSON.stringify(attrs);
-}
-
-/**
- * Extract all blocks from a ParsedEpub's content documents.
- */
-export function extractAllBlocks(contentDocs: ContentDoc[], bookId: string): Block[] {
-  const allBlocks: Block[] = [];
-  let globalIndex = 0;
-
-  for (const doc of contentDocs) {
-    const docBlocks = extractBlocksFromDoc(doc, bookId);
-    // Re-index globally across all docs
-    for (const block of docBlocks) {
-      block.index = globalIndex++;
-      // Re-generate ID with global index context for uniqueness
-      block.id = generateBlockId(bookId, `${block.docPath}:${globalIndex}:${block.originalMd}`);
-      allBlocks.push(block);
-    }
-  }
-
-  return allBlocks;
 }

@@ -117,13 +117,14 @@ const SCHEMAS: RpcMethodSchema[] = [
   },
   {
     method: 'book.get',
-    description: 'Get book details including block counts and chapter breakdown',
+    description: 'Get book details including block counts, chapter breakdown, and image file IDs',
     params: {
       bookId: { type: 'string', description: 'Book ID', required: true },
     },
-    result: { type: 'object', description: 'Book details with chapters', properties: {
+    result: { type: 'object', description: 'Book details with chapters and images', properties: {
       blockCounts: { type: 'object', description: 'Total and translated block counts' },
       chapters: { type: 'array', description: 'Per-chapter block statistics' },
+      images: { type: 'array', description: 'Image file records (id, originalPath, mimeType, size)' },
     }},
   },
   {
@@ -143,6 +144,23 @@ const SCHEMAS: RpcMethodSchema[] = [
       jobId: { type: 'string', description: 'Job ID with completed translation', required: true },
     },
     result: { type: 'file', description: 'Translated EPUB file (binary download)' },
+  },
+
+  // ── Files ────────────────────────────────────────
+  {
+    method: 'file.get',
+    description: 'Get metadata for a stored image file (binary data served via GET /files/:id)',
+    params: {
+      fileId: { type: 'string', description: 'File ID (UUID v5 from keccak256 of binary data)', required: true },
+    },
+    result: { type: 'object', description: 'File metadata', properties: {
+      id: { type: 'string', description: 'File ID' },
+      originalPath: { type: 'string', description: 'Original path in EPUB/FB2' },
+      mimeType: { type: 'string', description: 'MIME type (e.g. image/jpeg)' },
+      size: { type: 'number', description: 'File size in bytes' },
+      bookId: { type: 'string', description: 'Book ID this file belongs to' },
+      url: { type: 'string', description: 'URL to download the file binary data' },
+    }},
   },
 
   // ── Jobs ─────────────────────────────────────────
@@ -358,7 +376,17 @@ export function registerMethods(router: JsonRpcRouter, deps: {
           translatedBlocks: blocks.filter(b => b.translatedMd !== null).length,
         };
       });
-      return { ...book, blockCounts: counts, chapters };
+      // Include image file metadata (without binary data)
+      const files = db.getFilesByBook(book.id);
+      const images = files.map(f => ({
+        id: f.id,
+        originalPath: f.originalPath,
+        mimeType: f.mimeType,
+        size: f.data.length,
+        bookId: f.bookId,
+        url: `/files/${f.id}`,
+      }));
+      return { ...book, blockCounts: counts, chapters, images };
     } finally {
       db.close();
     }
@@ -396,6 +424,28 @@ export function registerMethods(router: JsonRpcRouter, deps: {
       return { __fileDownload: true }; // Marker — don't send as JSON
     }
     return { downloadUrl: `/api/download/${params.jobId}` };
+  });
+
+  // ── Files ────────────────────────────────────────
+
+  router.register('file.get', (params, _ctx) => {
+    const db = new TranslateDb(dbPath);
+    try {
+      const file = db.getFile(params.fileId);
+      if (!file) {
+        throw new RpcError(APP_ERRORS.BOOK_NOT_FOUND.code, `File not found: ${params.fileId}`);
+      }
+      return {
+        id: file.id,
+        originalPath: file.originalPath,
+        mimeType: file.mimeType,
+        size: file.data.length,
+        bookId: file.bookId,
+        url: `/files/${file.id}`,
+      };
+    } finally {
+      db.close();
+    }
   });
 
   // ── Jobs ─────────────────────────────────────────
