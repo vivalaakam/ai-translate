@@ -118,12 +118,45 @@ export function assembleEpub(
       ? docBlocks
       : docBlocks.map(b => ({ ...b, translatedMd: null })); // force original
 
-    // Find a title from the first heading block
-    let chapterTitle = docPath;
-    const headingBlock = blocksForAssembly.find(b => b.type === 'heading');
-    if (headingBlock) {
-      const mdText = headingBlock.translatedMd ?? headingBlock.originalMd;
-      chapterTitle = mdText.replace(/^#+\s*/, '').trim() || docPath;
+    // Find a title from heading blocks, skipping trivial ones
+    let chapterTitle = '';
+    const headings = blocksForAssembly.filter(b => b.type === 'heading');
+    for (let hi = 0; hi < headings.length; hi++) {
+      const mdText = headings[hi].translatedMd ?? headings[hi].originalMd;
+      const cleaned = cleanTitle(mdText);
+      if (!cleaned) continue;
+
+      // If this is just a number (chapter number) and there's a next heading,
+      // combine: "1. The Myth of the Ant Queen"
+      if (/^\d+$/.test(cleaned) && hi + 1 < headings.length) {
+        const nextMd = headings[hi + 1].translatedMd ?? headings[hi + 1].originalMd;
+        const nextCleaned = cleanTitle(nextMd);
+        if (nextCleaned && !/^\d+$/.test(nextCleaned)) {
+          chapterTitle = `${cleaned}. ${nextCleaned}`;
+          break;
+        }
+      }
+
+      chapterTitle = cleaned;
+      break;
+    }
+
+    // No heading found — try first text paragraph
+    if (!chapterTitle) {
+      const textBlock = blocksForAssembly.find(b => b.type === 'paragraph');
+      if (textBlock) {
+        const mdText = textBlock.translatedMd ?? textBlock.originalMd;
+        chapterTitle = cleanTitle(mdText, 80);
+      }
+    }
+
+    // Still no title — derive from doc_path basename
+    if (!chapterTitle) {
+      const baseName = docPath.split('/').pop()?.replace(/\.\w+$/, '') || docPath;
+      // Convert kebab/snake case to title case
+      chapterTitle = baseName
+        .replace(/[-_]/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase());
     }
 
     // Build file resolver for EPUB: file:ID or original path → images/ID.ext
@@ -217,6 +250,7 @@ div[style*="page-break-before:always"] {
   const manifestItems: string[] = [
     `    <item id="styles" href="styles.css" media-type="text/css"/>`,
     `    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>`,
+    `    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>`,
   ];
 
   for (const ch of chapterEntries) {
@@ -246,7 +280,7 @@ ${coverMeta}  </metadata>
   <manifest>
 ${manifestItems.join('\n')}
   </manifest>
-  <spine>
+  <spine toc="ncx">
 ${spineItems}
   </spine>
 </package>`;
@@ -277,6 +311,33 @@ ${navItems}
 
   zip.addFile('OEBPS/nav.xhtml', Buffer.from(nav, 'utf8'), '', 8);
 
+  // ── 8. toc.ncx (EPUB2 navigation for older readers) ────────────
+  const ncxNavPoints = chapterEntries.map((ch, i) =>
+    `  <navPoint id="${ch.id}" playOrder="${i + 1}">
+    <navLabel><text>${escapeXml(ch.title)}</text></navLabel>
+    <content src="${ch.href}"/>
+  </navPoint>`
+  ).join('\n');
+
+  const ncx = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1" xml:lang="${escapeXml(outputLang)}">
+<head>
+  <meta name="dtb:uid" content="${uidUri}"/>
+  <meta name="dtb:depth" content="1"/>
+  <meta name="dtb:totalPageCount" content="0"/>
+  <meta name="dtb:maxPageNumber" content="0"/>
+</head>
+<docTitle>
+  <text>${escapeXml(book.title)}</text>
+</docTitle>
+<navMap>
+${ncxNavPoints}
+</navMap>
+</ncx>`;
+
+  zip.addFile('OEBPS/toc.ncx', Buffer.from(ncx, 'utf8'), '', 8);
+
   // ── Write to disk ───────────────────────────────────────────
   const outputDir = path.dirname(outputPath);
   if (!fs.existsSync(outputDir)) {
@@ -286,6 +347,36 @@ ${navItems}
 }
 
 // ── Helpers ────────────────────────────────────────────────────
+
+/**
+ * Clean markdown text to produce a plain-text title for TOC.
+ * Removes: heading markers, images, links, bold/italic/underline markers.
+ * If result is empty or trivial (just "Image"/"images"), returns empty string.
+ */
+function cleanTitle(md: string, maxLen: number = 0): string {
+  let title = md
+    .replace(/^#+\s*/, '')          // Remove heading markers
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '')  // Remove ![alt](src) entirely
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')   // [text](url) → text
+    .replace(/\*\*([^*]+)\*\*/g, '$1')  // **bold** → bold
+    .replace(/__([^_]+)__/g, '$1')      // __bold__ → bold
+    .replace(/\*([^*]+)\*/g, '$1')     // *italic* → italic
+    .replace(/_([^_]+)_/g, '$1')       // _italic_ → italic
+    .replace(/\+\+([^+]+)\+\+/g, '$1') // ++underline++ → underline
+    .replace(/`([^`]+)`/g, '$1')       // `code` → code
+    .replace(/~~([^~]+)~~/g, '$1')     // ~~strike~~ → strike
+    .trim();
+
+  // Skip trivial titles that are just image alt text
+  if (/^(images?|cover|image)$/i.test(title)) {
+    title = '';
+  }
+
+  if (maxLen > 0 && title.length > maxLen) {
+    title = title.slice(0, maxLen).replace(/\s+\S*$/, '') + '…';
+  }
+  return title;
+}
 
 function escapeXml(str: string): string {
   return str

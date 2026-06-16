@@ -8,3 +8,4 @@ dist/
 *.zip
 .env
 test/fixtures/output/
+tmp/*.epub
