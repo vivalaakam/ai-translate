@@ -6,6 +6,7 @@ const md = new MarkdownIt({
   html: true,
   breaks: false,
   linkify: false,
+  xhtmlOut: true,  // XHTML-compliant output: <img />, <br />, <hr />
 });
 
 /**
@@ -74,8 +75,12 @@ export function blockToHtml(block: Block, db?: TranslateDb, bookId?: string, fil
     // Parse Markdown → HTML for the image
     let htmlContent = md.render(resolvedMd).trim();
 
-    // md.render wraps in <p> tags — strip if our target is <p>
-    if (tagName !== 'p' && htmlContent.startsWith('<p>') && htmlContent.endsWith('</p>')) {
+    // Ensure XHTML compliance: self-close <img />, <br />, <hr />
+    htmlContent = xhtmlFix(htmlContent);
+
+    // md.render wraps in <p> tags — always strip for image blocks
+    // (we provide our own wrapper below)
+    if (htmlContent.startsWith('<p>') && htmlContent.endsWith('</p>')) {
       htmlContent = htmlContent.slice(3, -4).trim();
     }
 
@@ -89,6 +94,9 @@ export function blockToHtml(block: Block, db?: TranslateDb, bookId?: string, fil
 
   // Parse Markdown → HTML
   let htmlContent = md.render(mdText).trim();
+
+  // Ensure XHTML compliance: self-close void elements
+  htmlContent = xhtmlFix(htmlContent);
 
   // md.render wraps in <p> tags — strip the outer <p> if our target tag isn't <p>
   if (tagName !== 'p' && htmlContent.startsWith('<p>') && htmlContent.endsWith('</p>')) {
@@ -185,4 +193,23 @@ function escapeAttr(val: string): string {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+/**
+ * Fix HTML for XHTML compliance: self-close void elements.
+ * Converts `<img ...>` → `<img ... />`, `<br>` → `<br />`, `<hr>` → `<hr />`,
+ * `<input ...>` → `<input ... />`, etc.
+ */
+function xhtmlFix(html: string): string {
+  const voidElements = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
+  for (const tag of voidElements) {
+    // Match <tag ...> but NOT already <tag .../> or <tag ... />
+    const re = new RegExp(`<${tag}(\\s[^>]*)?>(?!\\s*</${tag}>)`, 'gi');
+    html = html.replace(re, (match, attrs) => {
+      // Already self-closed?
+      if (match.endsWith('/>')) return match;
+      return `<${tag}${attrs || ''} />`;
+    });
+  }
+  return html;
 }
