@@ -1090,9 +1090,21 @@
       try {
         const result = await rpc('book.export', { bookId, mode });
 
-        // Trigger download via GET /exports/filename
-        window.location.href = result.downloadUrl;
-        statusText.textContent = 'Download started!';
+        // Download via fetch + blob for reliable completion
+        statusText.textContent = 'Downloading…';
+        progressBar.style.width = '75%';
+        const resp = await fetch(result.downloadUrl);
+        if (!resp.ok) throw new Error('Download failed: ' + resp.status);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = result.downloadUrl.split('/').pop();
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        statusText.textContent = 'Download complete!';
         progressBar.style.width = '100%';
       } catch (err) {
         statusText.textContent = 'Export failed: ' + (err.message || err);
