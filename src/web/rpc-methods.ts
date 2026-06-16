@@ -12,7 +12,7 @@ import { JsonRpcRouter, RpcError, APP_ERRORS } from './jsonrpc.js';
 import type { RpcContext, RpcMethodHandler } from './jsonrpc.js';
 import type { JsonRpcRequest, RpcMethodSchema } from './jsonrpc.js';
 import { JobQueue } from './job-queue.js';
-import { runTranslation, runUpload } from './pipeline.js';
+import { runTranslation, runUpload, runExport } from './pipeline.js';
 import { TranslateDb } from '../db/database.js';
 import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER, UPLOAD_ONLY } from '../utils/constants.js';
 
@@ -144,6 +144,19 @@ const SCHEMAS: RpcMethodSchema[] = [
       jobId: { type: 'string', description: 'Job ID with completed translation', required: true },
     },
     result: { type: 'file', description: 'Translated EPUB file (binary download)' },
+  },
+  {
+    method: 'book.export',
+    description: 'Export a book as EPUB — original or translated version. Returns a download URL when ready.',
+    params: {
+      bookId: { type: 'string', description: 'Book ID', required: true },
+      mode: { type: 'string', description: '"original" or "translated" (default: translated)', required: false },
+    },
+    result: { type: 'object', description: 'Export result with download URL', properties: {
+      outputPath: { type: 'string', description: 'Path to the generated EPUB file' },
+      downloadUrl: { type: 'string', description: 'URL to download the EPUB' },
+      mode: { type: 'string', description: 'Export mode used' },
+    }},
   },
 
   // ── Files ────────────────────────────────────────
@@ -424,6 +437,27 @@ export function registerMethods(router: JsonRpcRouter, deps: {
       return { __fileDownload: true }; // Marker — don't send as JSON
     }
     return { downloadUrl: `/api/download/${params.jobId}` };
+  });
+
+  router.register('book.export', (params, _ctx) => {
+    const mode = params.mode === 'original' ? 'original' : 'translated';
+    const outputDir = JobQueue.getOutputDir();
+
+    try {
+      const outputPath = runExport(params.bookId, { mode }, outputDir, dbPath);
+      const fileName = path.basename(outputPath);
+
+      return {
+        outputPath,
+        downloadUrl: `/exports/${encodeURIComponent(fileName)}`,
+        mode,
+      };
+    } catch (err: any) {
+      if (err.message?.includes('Book not found')) {
+        throw new RpcError(APP_ERRORS.BOOK_NOT_FOUND.code, APP_ERRORS.BOOK_NOT_FOUND.message);
+      }
+      throw err;
+    }
   });
 
   // ── Files ────────────────────────────────────────

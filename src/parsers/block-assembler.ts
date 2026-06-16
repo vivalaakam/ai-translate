@@ -19,6 +19,7 @@ const TYPE_TO_TAG: Record<string, string> = {
   quote: 'blockquote',
   code: 'pre',
   table_row: 'tr',
+  page_break: 'div',
   other: 'p',
 };
 
@@ -37,10 +38,13 @@ function headingLevel(mdText: string): string {
  * Convert a single Block back to an HTML string.
  * Uses translatedMd if available, falls back to originalMd.
  *
- * For image blocks, resolves file:ID references to actual URLs
- * using the database files table.
+ * @param block - Block to convert
+ * @param db - Optional database for resolving file references
+ * @param bookId - Optional book ID for file resolution
+ * @param fileResolver - Optional function to resolve file:ID → URL/path.
+ *                       If not provided, uses /files/ID web paths.
  */
-export function blockToHtml(block: Block, db?: TranslateDb, bookId?: string): string {
+export function blockToHtml(block: Block, db?: TranslateDb, bookId?: string, fileResolver?: (fileId: string) => string): string {
   const mdText = block.translatedMd ?? block.originalMd;
   let tagName = block.tagName || TYPE_TO_TAG[block.type] || 'p';
 
@@ -49,14 +53,22 @@ export function blockToHtml(block: Block, db?: TranslateDb, bookId?: string): st
     tagName = headingLevel(mdText);
   }
 
+  // Handle page breaks — emit a div with page-break-before style
+  if (block.type === 'page_break') {
+    return `<div style="page-break-before:always"/>`;
+  }
+
   // For image blocks, resolve file:ID references
   if (block.type === 'image') {
     let resolvedMd = mdText;
 
-    // Replace file:ID references with actual serving URLs
+    // Replace file:ID references with resolved URLs/paths
     resolvedMd = resolvedMd.replace(/!\[([^\]]*)\]\(file:([^)]+)\)/g, (_match, alt, fileId) => {
-      // Serve files via the web API
-      return `![${alt}](/rpc/file/${fileId})`;
+      if (fileResolver) {
+        return `![${alt}](${fileResolver(fileId)})`;
+      }
+      // Default: serve files via the web API
+      return `![${alt}](/files/${fileId})`;
     });
 
     // Parse Markdown → HTML for the image
@@ -114,10 +126,13 @@ export function blockToHtml(block: Block, db?: TranslateDb, bookId?: string): st
  * Reassemble a content document's HTML from its blocks.
  * Produces a complete XHTML body content.
  *
- * For image blocks, resolves file:ID references to actual content.
+ * @param blocks - Blocks to assemble
+ * @param db - Optional database
+ * @param bookId - Optional book ID
+ * @param fileResolver - Optional function to resolve file:ID → path/URL
  */
-export function assembleDocHtml(blocks: Block[], db?: TranslateDb, bookId?: string): string {
-  const parts = blocks.map(b => blockToHtml(b, db, bookId));
+export function assembleDocHtml(blocks: Block[], db?: TranslateDb, bookId?: string, fileResolver?: (fileId: string) => string): string {
+  const parts = blocks.map(b => blockToHtml(b, db, bookId, fileResolver));
   return parts.join('\n');
 }
 
@@ -125,8 +140,8 @@ export function assembleDocHtml(blocks: Block[], db?: TranslateDb, bookId?: stri
  * Reassemble a full XHTML document for a content doc.
  * Wraps the block HTML in a proper XHTML template.
  */
-export function assembleXhtmlDoc(blocks: Block[], docPath: string, db?: TranslateDb, bookId?: string): string {
-  const bodyContent = assembleDocHtml(blocks, db, bookId);
+export function assembleXhtmlDoc(blocks: Block[], docPath: string, db?: TranslateDb, bookId?: string, fileResolver?: (fileId: string) => string): string {
+  const bodyContent = assembleDocHtml(blocks, db, bookId, fileResolver);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">

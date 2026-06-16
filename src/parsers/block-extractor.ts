@@ -13,6 +13,7 @@ const TAG_TO_TYPE: Record<string, BlockType> = {
   blockquote: 'quote',
   pre: 'code', code: 'code',
   tr: 'table_row',
+  hr: 'page_break',
 };
 
 /**
@@ -76,6 +77,23 @@ function extractBlock(node: any, bookId: string, docPath: string, index: number,
 
   const type = TAG_TO_TYPE[tagName] || 'other';
   const attributes = extractAttributes(node);
+
+  // Detect page breaks: <hr>, or elements with page-break-before/after CSS
+  if (type === 'page_break' || hasPageBreak(node)) {
+    const blockId = generateBlockId(bookId, `page_break:${docPath}:${index}`);
+    return {
+      id: blockId,
+      bookId,
+      index,
+      docPath,
+      type: 'page_break',
+      originalMd: '---',
+      translatedMd: null,
+      fileId: null,
+      tagName,
+      attributes,
+    };
+  }
 
   // Handle image blocks specially
   if (type === 'image' || tagName === 'img' || tagName === 'image') {
@@ -251,6 +269,20 @@ export function extractAllBlocks(contentDocs: ContentDoc[], bookId: string, imag
   }
 
   return { blocks: allBlocks, files };
+}
+
+/**
+ * Check if a node has a page-break CSS property.
+ * Detects: page-break-before: always, page-break-after: always,
+ * break-before: page, break-after: page
+ */
+function hasPageBreak(node: any): boolean {
+  const style = node.getAttribute?.('style') || '';
+  if (/page-break-before\s*:\s*always/i.test(style)) return true;
+  if (/page-break-after\s*:\s*always/i.test(style)) return true;
+  if (/break-before\s*:\s*page/i.test(style)) return true;
+  if (/break-after\s*:\s*page/i.test(style)) return true;
+  return false;
 }
 
 /**

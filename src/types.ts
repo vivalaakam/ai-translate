@@ -207,7 +207,7 @@ export interface TranslationJob {
  * Block types extracted from a book's content documents.
  * Each block is one semantic unit — a paragraph, heading, image, etc.
  */
-export type BlockType = 'heading' | 'paragraph' | 'image' | 'list_item' | 'quote' | 'code' | 'table_row' | 'other';
+export type BlockType = 'heading' | 'paragraph' | 'image' | 'list_item' | 'quote' | 'code' | 'table_row' | 'page_break' | 'other';
 
 /**
  * A single block extracted from a book, stored as one row in the blocks table.

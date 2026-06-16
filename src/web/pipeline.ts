@@ -4,10 +4,9 @@ import fs from 'fs';
 import { TranslateDb, generateBookId } from '../db/database.js';
 import { EpubParser } from '../parsers/epub-parser.js';
 import { Fb2Parser } from '../parsers/fb2-parser.js';
-import { EpubWriter } from '../parsers/epub-writer.js';
+import { assembleEpub } from '../parsers/epub-assembler.js';
 import { OllamaClient } from '../translators/ollama-client.js';
 import { extractAllBlocks } from '../parsers/block-extractor.js';
-import { assembleDocHtml } from '../parsers/block-assembler.js';
 import { JobQueue as JQStatic } from '../web/job-queue.js';
 import { JobQueue } from '../web/job-queue.js';
 import { parseProvider, ensureModelLoaded, unloadIfWeLoaded } from '../translators/model-manager.js';
@@ -240,19 +239,9 @@ export async function runTranslation(
     // ── Step 4: Assemble ────────────────────────────────────────
     jobQueue.updateStatus(job.id, 'assembling', 'Assembling translated EPUB...', 92);
 
-    const writer = new EpubWriter(parsed);
-
-    // Reassemble each content doc from its blocks
-    const docPaths = db.getDocPaths(bookId);
-    for (const docPath of docPaths) {
-      const docBlocks = db.getBlocksByDoc(bookId, docPath);
-      const html = assembleDocHtml(docBlocks, db, bookId);
-      writer.updateContentDoc(docPath, html);
-    }
-
     const baseName = path.basename(job.originalFilename, path.extname(job.originalFilename));
     const outputPath = path.join(outputDir, `${job.id}_${baseName}_${job.targetLang}.epub`);
-    await writer.write(outputPath);
+    assembleEpub(bookId, db, outputPath, { mode: 'translated', lang: job.targetLang });
 
     jobQueue.setOutputPath(job.id, outputPath);
     jobQueue.updateStatus(job.id, 'completed', 'Translation complete!', 100);
@@ -270,5 +259,43 @@ export async function runTranslation(
         // Best-effort — don't fail the job on unload failure
       }
     }
+  }
+}
+
+/**
+ * Export a book from the database to an EPUB file.
+ * Works for both original and translated versions.
+ *
+ * @param bookId - Book ID in the database
+ * @param options - Export mode ('original' or 'translated') and language
+ * @param outputDir - Directory for the output EPUB file
+ * @param dbPath - Path to the SQLite database
+ * @returns Output file path
+ */
+export function runExport(
+  bookId: string,
+  options: { mode: 'original' | 'translated'; lang?: string },
+  outputDir: string,
+  dbPath?: string,
+): string {
+  const db = new TranslateDb(dbPath);
+  try {
+    const book = db.getBook(bookId);
+    if (!book) throw new Error(`Book not found: ${bookId}`);
+
+    const suffix = options.mode === 'translated' ? `_${book.targetLang || 'translated'}` : '_original';
+    const baseName = path.basename(book.filename, path.extname(book.filename));
+    const outputPath = path.join(outputDir, `${baseName}${suffix}.epub`);
+
+    // Ensure output directory exists
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    assembleEpub(bookId, db, outputPath, options);
+
+    return outputPath;
+  } finally {
+    db.close();
   }
 }

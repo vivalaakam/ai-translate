@@ -268,6 +268,7 @@
     .btn-sm:hover { opacity: 0.8; }
     .btn-translate { background: var(--accent); color: white; }
     .btn-download { background: var(--green); color: white; }
+    .btn-blue { background: #3b82f6; color: white; }
     .btn-delete { background: var(--surface2); color: var(--text2); }
 
     .empty-state {
@@ -552,6 +553,20 @@
         </div>
         <div class="btn-row" style="margin-top:16px">
           <button class="btn btn-green" id="detailTranslateBtn" disabled onclick="startTranslationFromDetail()">🚀 Start Translation</button>
+        </div>
+      </div>
+
+      <!-- Export section -->
+      <div class="detail-card" id="exportSection" style="display:none">
+        <h3 style="font-size:16px;font-weight:600;margin-bottom:8px">📦 Export EPUB</h3>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:12px">Download the book as EPUB — original text or translated version.</p>
+        <div class="btn-row">
+          <button class="btn btn-blue" id="exportOriginalBtn" onclick="exportBook('original')">📄 Export Original</button>
+          <button class="btn btn-green" id="exportTranslatedBtn" style="display:none" onclick="exportBook('translated')">🌐 Export Translated</button>
+        </div>
+        <div id="exportProgress" style="display:none;margin-top:12px">
+          <div class="progress-text"><span id="exportStatusText">Assembling EPUB…</span></div>
+          <div class="progress-bar" style="margin-top:4px"><div class="fill" id="exportProgressBar" style="width:50%"></div></div>
         </div>
       </div>
 
@@ -936,7 +951,6 @@
           </div>
           ${progressBar}
           <div class="book-actions" style="margin-top:8px">
-            ${isComplete ? '<button class="btn-sm btn-download" onclick="downloadBook(\'' + bookId + '\')">⬇️ Download</button>' : ''}
             <button class="btn-sm btn-delete" onclick="deleteBookFromDetail('${bookId}')">✕ Delete</button>
           </div>
         `;
@@ -948,6 +962,12 @@
         } else {
           translateSection.style.display = '';
         }
+
+        // Export section — always show, enable translated button if translation exists
+        const exportSection = document.getElementById('exportSection');
+        exportSection.style.display = '';
+        const exportTranslatedBtn = document.getElementById('exportTranslatedBtn');
+        exportTranslatedBtn.style.display = (translated > 0) ? '' : 'none';
 
         // Chapters list
         const chapters = book.chapters || [];
@@ -1048,6 +1068,40 @@
         await rpc('book.delete', { bookId });
       } catch {}
       goHome();
+    };
+
+    window.exportBook = async function(mode) {
+      const bookId = currentBookId;
+      if (!bookId) return;
+
+      const progressDiv = document.getElementById('exportProgress');
+      const statusText = document.getElementById('exportStatusText');
+      const progressBar = document.getElementById('exportProgressBar');
+      const originalBtn = document.getElementById('exportOriginalBtn');
+      const translatedBtn = document.getElementById('exportTranslatedBtn');
+
+      // Show progress, disable buttons
+      progressDiv.style.display = '';
+      statusText.textContent = 'Assembling EPUB…';
+      progressBar.style.width = '50%';
+      originalBtn.disabled = true;
+      translatedBtn.disabled = true;
+
+      try {
+        const result = await rpc('book.export', { bookId, mode });
+
+        // Trigger download via GET /exports/filename
+        window.location.href = result.downloadUrl;
+        statusText.textContent = 'Download started!';
+        progressBar.style.width = '100%';
+      } catch (err) {
+        statusText.textContent = 'Export failed: ' + (err.message || err);
+        progressBar.style.width = '0%';
+      } finally {
+        originalBtn.disabled = false;
+        translatedBtn.disabled = false;
+        setTimeout(() => { progressDiv.style.display = 'none'; }, 3000);
+      }
     };
 
     window.downloadBook = function(bookId) {
