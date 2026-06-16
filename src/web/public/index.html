@@ -51,6 +51,7 @@
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       margin-bottom: 8px;
+      cursor: pointer;
     }
     .header p {
       color: var(--text2);
@@ -229,6 +230,7 @@
       font-size: 12px;
       color: var(--text2);
       margin-bottom: 10px;
+      flex-wrap: wrap;
     }
     .book-stats span { display: flex; align-items: center; gap: 4px; }
 
@@ -293,34 +295,103 @@
     .api-dot.ok { background: var(--green); }
     .api-dot.err { background: var(--red); }
 
-    /* Translate modal */
-    .modal-overlay {
+    /* Book detail page */
+    .book-detail {
       display: none;
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.6);
-      z-index: 100;
-      align-items: center;
-      justify-content: center;
     }
-    .modal-overlay.visible { display: flex; }
-    .modal {
+    .book-detail.visible { display: block; }
+
+    .book-detail-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .back-btn {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 8px 12px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .back-btn:hover { opacity: 0.8; }
+
+    .detail-card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 24px;
-      width: 90%;
-      max-width: 480px;
-    }
-    .modal h3 {
-      font-size: 18px;
-      font-weight: 600;
       margin-bottom: 16px;
     }
-    .modal .book-info {
+    .detail-title {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .detail-author {
+      font-size: 14px;
+      color: var(--text2);
+      margin-bottom: 16px;
+    }
+    .detail-meta {
+      display: flex;
+      gap: 20px;
       font-size: 13px;
       color: var(--text2);
       margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .detail-meta span { display: flex; align-items: center; gap: 4px; }
+
+    .detail-progress {
+      margin-bottom: 16px;
+    }
+    .detail-progress .progress-bar {
+      height: 6px;
+      margin-top: 6px;
+    }
+    .detail-progress .progress-text {
+      font-size: 13px;
+      color: var(--text2);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .chapters-list {
+      max-height: 300px;
+      overflow-y: auto;
+      margin-top: 12px;
+    }
+    .chapter-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      font-size: 13px;
+      border-bottom: 1px solid var(--border);
+    }
+    .chapter-row:last-child { border-bottom: none; }
+    .chapter-name { color: var(--text2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 12px; }
+    .chapter-progress { color: var(--text2); white-space: nowrap; font-family: monospace; font-size: 12px; }
+
+    /* Translate section in book detail */
+    .translate-section {
+      background: var(--surface);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    .translate-section h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
     /* Status badge */
@@ -342,6 +413,36 @@
 
     .job-message { font-size: 12px; color: var(--text2); }
 
+    /* Upload progress overlay */
+    .upload-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+    }
+    .upload-overlay.visible { display: flex; }
+    .upload-spinner {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px 48px;
+      text-align: center;
+    }
+    .upload-spinner .icon { font-size: 40px; margin-bottom: 12px; }
+    .upload-spinner .text { color: var(--text2); font-size: 14px; }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .spinner-icon {
+      animation: spin 1.5s linear infinite;
+      display: inline-block;
+    }
+
     @media (max-width: 500px) {
       .form-row { grid-template-columns: 1fr; }
       .btn-row { flex-direction: column; }
@@ -351,7 +452,7 @@
 <body>
   <div class="container">
     <div class="header">
-      <h1>📚 AI Translate</h1>
+      <h1 onclick="goHome()">📚 AI Translate</h1>
       <p>Translate EPUB &amp; FB2 books — formatting preserved</p>
     </div>
 
@@ -361,7 +462,7 @@
     </div>
 
     <!-- Tabs: Upload / Library -->
-    <div class="tabs">
+    <div class="tabs" id="mainTabs">
       <button class="tab active" data-tab="upload" onclick="switchTab('upload')">📤 Upload</button>
       <button class="tab" data-tab="library" onclick="switchTab('library')">📖 Library</button>
     </div>
@@ -380,49 +481,8 @@
             <span class="name" id="fileName"></span>
           </div>
 
-          <div class="form-row" id="translateOptions" style="display:none">
-            <div class="form-group">
-              <label>Source Language</label>
-              <select id="sourceLang">
-                <option value="auto">Auto-detect</option>
-                <option value="en">English</option>
-                <option value="ru">Russian</option>
-                <option value="de">German</option>
-                <option value="fr">French</option>
-                <option value="es">Spanish</option>
-                <option value="zh">Chinese</option>
-                <option value="ja">Japanese</option>
-                <option value="ko">Korean</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>Target Language *</label>
-              <select id="targetLang" required>
-                <option value="">Select…</option>
-                <option value="ru">Russian</option>
-                <option value="en">English</option>
-                <option value="de">German</option>
-                <option value="fr">French</option>
-                <option value="es">Spanish</option>
-                <option value="zh">Chinese</option>
-                <option value="ja">Japanese</option>
-                <option value="ko">Korean</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="form-row" id="modelRow" style="display:none">
-            <div class="form-group full">
-              <label>Model</label>
-              <select id="modelSelect">
-                <option value="">Loading models…</option>
-              </select>
-            </div>
-          </div>
-
           <div class="btn-row">
-            <button type="submit" class="btn btn-secondary" id="uploadBtn">📤 Upload Only</button>
-            <button type="button" class="btn btn-primary" id="translateBtn" disabled>🚀 Upload &amp; Translate</button>
+            <button type="submit" class="btn btn-primary" id="uploadBtn" disabled>📤 Upload</button>
           </div>
         </form>
       </div>
@@ -438,55 +498,76 @@
         <div class="empty-state" id="bookEmpty">No books yet — upload one to get started</div>
       </div>
     </div>
+
+    <!-- Book detail page (replaces tabs content) -->
+    <div class="book-detail" id="bookDetail">
+      <div class="book-detail-header">
+        <button class="back-btn" onclick="goHome()">← Back</button>
+      </div>
+
+      <div class="detail-card" id="detailInfo">
+        <!-- filled dynamically -->
+      </div>
+
+      <!-- Translate section -->
+      <div class="translate-section" id="translateSection">
+        <h3>🌐 Translate this book</h3>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Source Language</label>
+            <select id="detailSourceLang">
+              <option value="auto">Auto-detect</option>
+              <option value="en">English</option>
+              <option value="ru">Russian</option>
+              <option value="de">German</option>
+              <option value="fr">French</option>
+              <option value="es">Spanish</option>
+              <option value="zh">Chinese</option>
+              <option value="ja">Japanese</option>
+              <option value="ko">Korean</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Target Language *</label>
+            <select id="detailTargetLang" required>
+              <option value="">Select…</option>
+              <option value="ru">Russian</option>
+              <option value="en">English</option>
+              <option value="de">German</option>
+              <option value="fr">French</option>
+              <option value="es">Spanish</option>
+              <option value="zh">Chinese</option>
+              <option value="ja">Japanese</option>
+              <option value="ko">Korean</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row" style="margin-top:12px">
+          <div class="form-group full">
+            <label>Model</label>
+            <select id="detailModel">
+              <option value="">Loading models…</option>
+            </select>
+          </div>
+        </div>
+        <div class="btn-row" style="margin-top:16px">
+          <button class="btn btn-green" id="detailTranslateBtn" disabled onclick="startTranslationFromDetail()">🚀 Start Translation</button>
+        </div>
+      </div>
+
+      <!-- Chapters list -->
+      <div class="detail-card" id="chaptersCard" style="display:none">
+        <h3 style="font-size:16px;font-weight:600;margin-bottom:8px">📑 Chapters</h3>
+        <div class="chapters-list" id="chaptersList"></div>
+      </div>
+    </div>
   </div>
 
-  <!-- Translate modal -->
-  <div class="modal-overlay" id="translateModal">
-    <div class="modal">
-      <h3>🌐 Translate Book</h3>
-      <div class="book-info" id="modalBookInfo"></div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>Source Language</label>
-          <select id="modalSourceLang">
-            <option value="auto">Auto-detect</option>
-            <option value="en">English</option>
-            <option value="ru">Russian</option>
-            <option value="de">German</option>
-            <option value="fr">French</option>
-            <option value="es">Spanish</option>
-            <option value="zh">Chinese</option>
-            <option value="ja">Japanese</option>
-            <option value="ko">Korean</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Target Language *</label>
-          <select id="modalTargetLang" required>
-            <option value="">Select…</option>
-            <option value="ru">Russian</option>
-            <option value="en">English</option>
-            <option value="de">German</option>
-            <option value="fr">French</option>
-            <option value="es">Spanish</option>
-            <option value="zh">Chinese</option>
-            <option value="ja">Japanese</option>
-            <option value="ko">Korean</option>
-          </select>
-        </div>
-      </div>
-      <div class="form-row" style="margin-top:12px">
-        <div class="form-group full">
-          <label>Model</label>
-          <select id="modalModel">
-            <option value="">Loading models…</option>
-          </select>
-        </div>
-      </div>
-      <div class="btn-row" style="margin-top:16px">
-        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-green" id="modalTranslateBtn" disabled onclick="startTranslateFromModal()">🚀 Start Translation</button>
-      </div>
+  <!-- Upload progress overlay -->
+  <div class="upload-overlay" id="uploadOverlay">
+    <div class="upload-spinner">
+      <div class="icon"><span class="spinner-icon">⏳</span></div>
+      <div class="text" id="uploadProgressText">Uploading &amp; parsing book…</div>
     </div>
   </div>
 
@@ -494,13 +575,6 @@
     // ─── JSON-RPC client ───────────────────────────────────
     let rpcId = 0;
 
-    /**
-     * Send a JSON-RPC 2.0 request.
-     * @param {string} method - RPC method name
-     * @param {object} params - Method parameters
-     * @returns {Promise<any>} - The result field from the response
-     * @throws {Error} - If the response contains an error
-     */
     async function rpc(method, params = {}) {
       const id = ++rpcId;
       const res = await fetch('/rpc', {
@@ -518,11 +592,6 @@
       return data.result;
     }
 
-    /**
-     * Send a JSON-RPC request with a file upload (multipart/form-data).
-     * The file is sent as a regular form field, and the RPC request
-     * is encoded as a JSON string in the "rpc" form field.
-     */
     async function rpcWithFile(method, params, file) {
       const id = ++rpcId;
       const form = new FormData();
@@ -547,6 +616,7 @@
     let appConfig = { uploadOnly: false, defaultModel: '', defaultProvider: '' };
     let currentBookId = null;
     let models = [];
+    let activeJobs = new Map(); // jobId -> bookId
 
     // ─── DOM refs ────────────────────────────────────────────
     const dropZone = document.getElementById('dropZone');
@@ -555,24 +625,47 @@
     const fileName = document.getElementById('fileName');
     const uploadForm = document.getElementById('uploadForm');
     const uploadBtn = document.getElementById('uploadBtn');
-    const translateBtn = document.getElementById('translateBtn');
-    const translateOptions = document.getElementById('translateOptions');
-    const modelRow = document.getElementById('modelRow');
-    const sourceLang = document.getElementById('sourceLang');
-    const targetLang = document.getElementById('targetLang');
-    const modelSelect = document.getElementById('modelSelect');
     const apiDot = document.getElementById('apiDot');
     const apiText = document.getElementById('apiText');
     const bookList = document.getElementById('bookList');
     const bookEmpty = document.getElementById('bookEmpty');
+    const uploadOverlay = document.getElementById('uploadOverlay');
+    const uploadProgressText = document.getElementById('uploadProgressText');
 
-    // ─── Tabs ────────────────────────────────────────────────
+    // ─── Navigation ─────────────────────────────────────────
+    // Views: 'upload' | 'library' | 'detail'
+    let currentView = 'upload';
+
+    window.goHome = function() {
+      currentBookId = null;
+      document.getElementById('bookDetail').classList.remove('visible');
+      document.getElementById('mainTabs').style.display = '';
+      switchTab('library');
+    };
+
     window.switchTab = function(tab) {
+      currentView = tab;
+      currentBookId = null;
+      document.getElementById('bookDetail').classList.remove('visible');
+      document.getElementById('mainTabs').style.display = '';
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
       document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
       document.getElementById('uploadTab').style.display = tab === 'upload' ? '' : 'none';
       document.getElementById('libraryTab').style.display = tab === 'library' ? '' : 'none';
       if (tab === 'library') loadBooks();
+    };
+
+    window.openBookDetail = async function(bookId) {
+      currentBookId = bookId;
+      currentView = 'detail';
+
+      // Hide tabs, show detail
+      document.getElementById('mainTabs').style.display = 'none';
+      document.getElementById('uploadTab').style.display = 'none';
+      document.getElementById('libraryTab').style.display = 'none';
+      document.getElementById('bookDetail').classList.add('visible');
+
+      await loadBookDetail(bookId);
     };
 
     // ─── File selection ──────────────────────────────────────
@@ -597,20 +690,15 @@
       selectedFile = file;
       fileName.textContent = file.name;
       fileInfo.classList.add('visible');
-
-      translateOptions.style.display = '';
-      if (!appConfig.uploadOnly) modelRow.style.display = '';
-      updateBtnState();
+      uploadBtn.disabled = false;
     }
 
     // ─── API check ──────────────────────────────────────────
     async function initApp() {
-      // Load config via RPC
       try {
         appConfig = await rpc('system.config');
       } catch {}
 
-      // Check models via RPC
       try {
         const data = await rpc('model.list');
         models = data.models || [];
@@ -618,19 +706,11 @@
         apiDot.className = 'api-dot ok';
         apiText.textContent = `API connected — ${models.length} model(s)`;
 
-        populateModelSelect(modelSelect);
-        populateModelSelect(document.getElementById('modalModel'));
-        updateBtnState();
+        populateModelSelect(document.getElementById('detailModel'));
       } catch {
         apiDot.className = 'api-dot err';
         apiText.textContent = 'API not available';
-        modelSelect.innerHTML = '<option value="">API unavailable</option>';
-        document.getElementById('modalModel').innerHTML = '<option value="">API unavailable</option>';
-      }
-
-      if (appConfig.uploadOnly) {
-        translateBtn.style.display = 'none';
-        modelRow.style.display = 'none';
+        document.getElementById('detailModel').innerHTML = '<option value="">API unavailable</option>';
       }
     }
     initApp();
@@ -650,71 +730,90 @@
       });
     }
 
-    // ─── Form state ─────────────────────────────────────────
-    targetLang.addEventListener('change', updateBtnState);
-
-    function updateBtnState() {
-      const hasFile = !!selectedFile;
-      uploadBtn.disabled = !hasFile;
-      translateBtn.disabled = !hasFile || !targetLang.value || (modelSelect.options.length > 0 && !modelSelect.value);
-    }
-
-    // ─── Upload Only ────────────────────────────────────────
+    // ─── Upload ──────────────────────────────────────────────
     uploadForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!selectedFile) return;
 
       uploadBtn.disabled = true;
-      translateBtn.disabled = true;
-      uploadBtn.textContent = '⏳ Uploading…';
+      uploadOverlay.classList.add('visible');
+      uploadProgressText.textContent = 'Uploading & parsing book…';
 
       try {
         const result = await rpcWithFile('book.upload', {}, selectedFile);
-        resetForm();
-        switchTab('library');
+        activeJobs.set(result.jobId, null); // bookId unknown until parsing completes
+
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'subscribe', jobId: result.jobId }));
         }
+
+        // Wait for parsing to complete (via WS updates), then navigate to book detail
+        // We'll poll for the job to finish since we need the bookId
+        pollForBookId(result.jobId);
+
       } catch (err) {
         alert('Upload error: ' + err.message);
+        uploadOverlay.classList.remove('visible');
+        uploadBtn.disabled = false;
       }
-      uploadBtn.textContent = '📤 Upload Only';
-      updateBtnState();
-    });
 
-    // ─── Upload & Translate ─────────────────────────────────
-    translateBtn.addEventListener('click', async () => {
-      if (!selectedFile || !targetLang.value) return;
-
-      uploadBtn.disabled = true;
-      translateBtn.disabled = true;
-      translateBtn.textContent = '⏳ Starting…';
-
-      try {
-        const result = await rpcWithFile('book.translate', {
-          sourceLang: sourceLang.value,
-          targetLang: targetLang.value,
-          model: modelSelect.value,
-        }, selectedFile);
-        resetForm();
-        switchTab('library');
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'subscribe', jobId: result.jobId }));
-        }
-      } catch (err) {
-        alert('Error: ' + err.message);
-      }
-      translateBtn.textContent = '🚀 Upload & Translate';
-      updateBtnState();
-    });
-
-    function resetForm() {
+      // Reset upload form
       selectedFile = null;
       fileInput.value = '';
       fileInfo.classList.remove('visible');
-      translateOptions.style.display = 'none';
-      modelRow.style.display = 'none';
-      targetLang.value = '';
+    });
+
+    async function pollForBookId(jobId) {
+      // Poll job status until we get book info
+      let attempts = 0;
+      const poll = async () => {
+        attempts++;
+        try {
+          const job = await rpc('job.get', { jobId });
+          if (job.status === 'completed' || job.status === 'failed') {
+            uploadOverlay.classList.remove('visible');
+            uploadBtn.disabled = false;
+
+            if (job.status === 'failed') {
+              alert('Upload failed: ' + (job.error || 'Unknown error'));
+              switchTab('upload');
+              return;
+            }
+
+            // Find the book that was just created
+            const books = await rpc('book.list');
+            const newBook = books.books.find(b => b.filename === job.originalFilename);
+            if (newBook) {
+              openBookDetail(newBook.id);
+            } else {
+              switchTab('library');
+            }
+            return;
+          }
+
+          // Update overlay text
+          if (job.message) {
+            uploadProgressText.textContent = job.message;
+          }
+
+          // Keep polling
+          if (attempts < 120) { // max ~2 min
+            setTimeout(poll, 1000);
+          } else {
+            uploadOverlay.classList.remove('visible');
+            uploadBtn.disabled = false;
+            switchTab('library');
+          }
+        } catch {
+          if (attempts < 120) {
+            setTimeout(poll, 2000);
+          } else {
+            uploadOverlay.classList.remove('visible');
+            uploadBtn.disabled = false;
+          }
+        }
+      };
+      setTimeout(poll, 500);
     }
 
     // ─── Books / Library ────────────────────────────────────
@@ -732,7 +831,6 @@
         bookEmpty.style.display = 'none';
 
         bookList.querySelectorAll('.book-card').forEach(el => el.remove());
-
         books.forEach(book => renderBookCard(book));
       } catch {}
     }
@@ -760,11 +858,13 @@
         statusBadge = '<span class="status-badge queued">parsed</span>';
       }
 
-      let actions = '';
-      if (!isComplete) {
-        actions += `<button class="btn-sm btn-translate" onclick="openTranslateModal('${book.id}', '${escapeAttr(book.title)}', '${escapeAttr(book.author)}')">🌐 Translate</button>`;
+      // Find active job for this book
+      let jobStatus = '';
+      for (const [jid, bid] of activeJobs) {
+        if (bid === book.id) {
+          jobStatus = `<div class="job-message">⏳ Job ${jid.slice(0,8)}…</div>`;
+        }
       }
-      actions += `<button class="btn-sm btn-delete" onclick="deleteBook('${book.id}')">✕</button>`;
 
       const progressBar = translated > 0 ? `
         <div class="progress-bar">
@@ -772,6 +872,7 @@
         </div>` : '';
 
       el.className = `book-card ${isComplete ? 'completed' : isTranslating ? 'translating' : ''}`;
+      el.onclick = () => openBookDetail(book.id);
       el.innerHTML = `
         <div class="book-top">
           <div class="book-title">${escapeHtml(book.title || book.filename)}</div>
@@ -785,37 +886,113 @@
           <span>🌍 ${book.language || '?'}</span>
           ${book.targetLang ? `<span>→ ${book.targetLang}</span>` : ''}
         </div>
-        <div class="book-actions">${actions}</div>
+        ${jobStatus}
       `;
     }
 
-    // ─── Translate Modal ────────────────────────────────────
-    window.openTranslateModal = function(bookId, title, author) {
-      currentBookId = bookId;
-      document.getElementById('modalBookInfo').textContent = `${title} by ${author}`;
-      document.getElementById('translateModal').classList.add('visible');
-      document.getElementById('modalTargetLang').value = '';
-      updateModalBtn();
-    };
+    // ─── Book Detail ────────────────────────────────────────
+    async function loadBookDetail(bookId) {
+      try {
+        const book = await rpc('book.get', { bookId });
 
-    window.closeModal = function() {
-      document.getElementById('translateModal').classList.remove('visible');
-      currentBookId = null;
-    };
+        const total = book.totalBlocks || book.blockCounts?.total || 0;
+        const translated = book.translatedBlocks || book.blockCounts?.translated || 0;
+        const pct = total > 0 ? Math.round((translated / total) * 100) : 0;
+        const isComplete = book.completedAt !== null;
+        const isTranslating = translated > 0 && !isComplete;
 
-    document.getElementById('modalTargetLang').addEventListener('change', updateModalBtn);
+        // Info card
+        let statusHtml = '';
+        if (isComplete) {
+          statusHtml = '<span class="status-badge completed">✓ Translation complete</span>';
+        } else if (isTranslating) {
+          statusHtml = '<span class="status-badge translating">Translating…</span>';
+        } else {
+          statusHtml = '<span class="status-badge queued">Parsed, ready to translate</span>';
+        }
 
-    function updateModalBtn() {
-      const btn = document.getElementById('modalTranslateBtn');
-      const sel = document.getElementById('modalModel');
-      btn.disabled = !document.getElementById('modalTargetLang').value || (sel.options.length > 0 && !sel.value);
+        const progressBar = translated > 0 ? `
+          <div class="detail-progress">
+            <div class="progress-text"><span>${translated} / ${total} blocks</span><span>${pct}%</span></div>
+            <div class="progress-bar">
+              <div class="fill ${isComplete ? 'completed' : ''}" style="width:${pct}%"></div>
+            </div>
+          </div>` : '';
+
+        document.getElementById('detailInfo').innerHTML = `
+          <div class="detail-title">${escapeHtml(book.title || book.filename)}</div>
+          <div class="detail-author">${escapeHtml(book.author || 'Unknown author')}</div>
+          <div class="detail-meta">
+            <span>📄 ${total} blocks</span>
+            <span>🌍 ${book.language || '?'}</span>
+            <span>📦 ${book.format || '?'}</span>
+            ${statusHtml}
+          </div>
+          ${progressBar}
+          <div class="book-actions" style="margin-top:8px">
+            ${isComplete ? '<button class="btn-sm btn-download" onclick="downloadBook(\'' + bookId + '\')">⬇️ Download</button>' : ''}
+            <button class="btn-sm btn-delete" onclick="deleteBookFromDetail('${bookId}')">✕ Delete</button>
+          </div>
+        `;
+
+        // Translate section — hide if completed or uploadOnly
+        const translateSection = document.getElementById('translateSection');
+        if (appConfig.uploadOnly || isComplete) {
+          translateSection.style.display = 'none';
+        } else {
+          translateSection.style.display = '';
+        }
+
+        // Chapters list
+        const chapters = book.chapters || [];
+        const chaptersCard = document.getElementById('chaptersCard');
+        if (chapters.length > 0) {
+          chaptersCard.style.display = '';
+          const chaptersList = document.getElementById('chaptersList');
+          chaptersList.innerHTML = chapters.map(ch => {
+            const chTotal = ch.totalBlocks || 0;
+            const chDone = ch.translatedBlocks || 0;
+            const chPct = chTotal > 0 ? Math.round((chDone / chTotal) * 100) : 0;
+            return `<div class="chapter-row">
+              <span class="chapter-name">${escapeHtml(ch.docPath)}</span>
+              <span class="chapter-progress">${chDone}/${chTotal} (${chPct}%)</span>
+            </div>`;
+          }).join('');
+        } else {
+          chaptersCard.style.display = 'none';
+        }
+
+      } catch (err) {
+        document.getElementById('detailInfo').innerHTML =
+          `<p style="color:var(--red)">Error loading book: ${err.message}</p>`;
+      }
     }
 
-    window.startTranslateFromModal = async function() {
+    // ─── Translate from detail page ────────────────────────
+    document.getElementById('detailTargetLang').addEventListener('change', updateDetailBtn);
+    document.getElementById('detailModel').addEventListener('change', updateDetailBtn);
+
+    function updateDetailBtn() {
+      const btn = document.getElementById('detailTranslateBtn');
+      const tLang = document.getElementById('detailTargetLang').value;
+      const model = document.getElementById('detailModel').value;
+      btn.disabled = !tLang || (models.length > 0 && !model);
+    }
+
+    window.startTranslationFromDetail = async function() {
       if (!currentBookId) return;
-      const tLang = document.getElementById('modalTargetLang').value;
-      const sLang = document.getElementById('modalSourceLang').value;
-      const model = document.getElementById('modalModel').value;
+      const tLang = document.getElementById('detailTargetLang').value;
+      const sLang = document.getElementById('detailSourceLang').value;
+      const model = document.getElementById('detailModel').value;
+
+      if (!tLang) {
+        alert('Please select a target language');
+        return;
+      }
+
+      const btn = document.getElementById('detailTranslateBtn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Starting…';
 
       try {
         const result = await rpc('book.startTranslation', {
@@ -824,14 +1001,51 @@
           sourceLang: sLang,
           model,
         });
-        closeModal();
+        activeJobs.set(result.jobId, currentBookId);
+
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'subscribe', jobId: result.jobId }));
         }
-        loadBooks();
+
+        // Refresh detail
+        await loadBookDetail(currentBookId);
+
       } catch (err) {
         alert(err.message || 'Failed to start translation');
       }
+      btn.textContent = '🚀 Start Translation';
+      updateDetailBtn();
+    };
+
+    window.deleteBookFromDetail = async function(bookId) {
+      if (!confirm('Delete this book and all its data?')) return;
+      try {
+        await rpc('book.delete', { bookId });
+      } catch {}
+      goHome();
+    };
+
+    window.downloadBook = function(bookId) {
+      // Download via RPC triggers file download — use a form POST approach
+      // We need to hit /rpc with book.download and get the file back
+      // Simplest: create a hidden form that POSTs to /rpc
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = '/rpc';
+      form.style.display = 'none';
+      const rpcField = document.createElement('input');
+      rpcField.type = 'hidden';
+      rpcField.name = 'rpc';
+      rpcField.value = JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'book.download',
+        params: { jobId: bookId },
+        id: ++rpcId,
+      });
+      form.appendChild(rpcField);
+      document.body.appendChild(form);
+      form.submit();
+      document.body.removeChild(form);
     };
 
     window.deleteBook = async function(id) {
@@ -855,12 +1069,18 @@
       ws.addEventListener('message', (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'job:update') {
-          if (document.getElementById('libraryTab').style.display !== 'none') {
-            loadBooks();
+          const job = msg.job;
+          // Map jobId -> bookId
+          if (job && activeJobs.has(job.id)) {
+            activeJobs.set(job.id, job.bookId || activeJobs.get(job.id));
           }
-        }
-        if (msg.type === 'jobs:list') {
-          // Initial jobs list — not used in new UI
+
+          // Refresh current view
+          if (currentView === 'library') {
+            loadBooks();
+          } else if (currentView === 'detail' && currentBookId) {
+            loadBookDetail(currentBookId);
+          }
         }
       });
 
@@ -875,9 +1095,6 @@
       const div = document.createElement('div');
       div.textContent = str || '';
       return div.innerHTML;
-    }
-    function escapeAttr(str) {
-      return (str || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
     }
   </script>
 </body>

@@ -161,11 +161,35 @@ function extractAttributes(node: any): string {
   if (!node.attributes) return '{}';
 
   const attrs: Record<string, string> = {};
-  for (const attr of node.attributes) {
-    // Keep useful attributes, skip structural ones
-    if (['class', 'id', 'style', 'href', 'src', 'alt', 'title', 'lang', 'xml:lang', 'xmlns'].includes(attr.name) ||
-        attr.name.startsWith('data-') || attr.name.startsWith('epub:')) {
-      attrs[attr.name] = attr.value;
+
+  // node.attributes can be a NamedNodeMap (DOM), a Map, or a plain object
+  if (typeof node.attributes === 'object') {
+    if (typeof node.attributes[Symbol.iterator] === 'function') {
+      // Iterable (NamedNodeMap, Map, etc.)
+      for (const attr of node.attributes) {
+        if (['class', 'id', 'style', 'href', 'src', 'alt', 'title', 'lang', 'xml:lang', 'xmlns'].includes(attr.name) ||
+            attr.name.startsWith('data-') || attr.name.startsWith('epub:')) {
+          attrs[attr.name] = attr.value;
+        }
+      }
+    } else if (node.attribs) {
+      // cheerio-style: attribs is a plain object { name: value }
+      for (const [name, value] of Object.entries(node.attribs)) {
+        if (['class', 'id', 'style', 'href', 'src', 'alt', 'title', 'lang', 'xml:lang', 'xmlns'].includes(name) ||
+            name.startsWith('data-') || name.startsWith('epub:')) {
+          attrs[name] = value as string;
+        }
+      }
+    } else {
+      // Plain object: { name: value }
+      for (const [name, value] of Object.entries(node.attributes)) {
+        if (typeof value === 'string') {
+          if (['class', 'id', 'style', 'href', 'src', 'alt', 'title', 'lang', 'xml:lang', 'xmlns'].includes(name) ||
+              name.startsWith('data-') || name.startsWith('epub:')) {
+            attrs[name] = value;
+          }
+        }
+      }
     }
   }
   return JSON.stringify(attrs);
