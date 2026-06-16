@@ -46,6 +46,7 @@ export class EpubParser {
     return {
       metadata: this.metadata,
       contentDocs: this.contentDocs,
+      _zip: this.zip,
     };
   }
 
