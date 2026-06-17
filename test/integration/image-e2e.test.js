@@ -96,7 +96,7 @@ describe('E2E: EPUB import/export with image', () => {
     expect(storedFiles.length).toBeGreaterThan(0);
 
     // ── Step 4: Assemble EPUB (original mode) ──────────────────
-    const outputPath = path.join(tmpDir, 'exported_original.epub');
+    const outputPath = path.join(tmpDir, 'exported_exported.epub');
     assembleEpub(bookId, db, outputPath, { mode: 'original' });
 
     expect(fs.existsSync(outputPath)).toBe(true);

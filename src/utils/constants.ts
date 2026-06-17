@@ -15,9 +15,6 @@ export const SUPPORTED_INPUT_FORMATS: string[] = ['.epub', '.fb2'];
 export const FB2_NS = 'http://www.gribuser.ru/xml/fictionbook/2.0';
 
 // Translation prompt template
-export const TRANSLATION_PROMPT_TEMPLATE = `You are a professional translator. Translate the following text from {sourceLang} to {targetLang}.
-Preserve all formatting markers exactly as they appear. Do not add any commentary or notes.
-Only output the translation, nothing else.
+export const TRANSLATION_PROMPT_TEMPLATE = `Translate the following text into {targetLang}. Note that you should only output the translated result without any additional explanation:
 
-Text to translate:
-{text}`;
+{sourceText}`;

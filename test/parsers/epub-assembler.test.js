@@ -84,7 +84,7 @@ afterAll(() => {
 
 describe('assembleEpub', () => {
   it('should create a valid EPUB file (original mode)', () => {
-    const outputPath = path.join(tmpDir, 'test_original.epub');
+    const outputPath = path.join(tmpDir, 'test_exported.epub');
     assembleEpub(bookId, db, outputPath, { mode: 'original' });
 
     expect(fs.existsSync(outputPath)).toBe(true);

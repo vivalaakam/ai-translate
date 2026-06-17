@@ -283,7 +283,7 @@ export function runExport(
     const book = db.getBook(bookId);
     if (!book) throw new Error(`Book not found: ${bookId}`);
 
-    const suffix = options.mode === 'translated' ? `_${book.targetLang || 'translated'}` : '_original';
+    const suffix = options.mode === 'translated' ? `_${book.targetLang || 'translated'}` : '_exported';
     const baseName = path.basename(book.filename, path.extname(book.filename));
     const outputPath = path.join(outputDir, `${baseName}${suffix}.epub`);
 

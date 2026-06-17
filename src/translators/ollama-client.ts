@@ -66,7 +66,7 @@ export class OllamaClient {
     return TRANSLATION_PROMPT_TEMPLATE
       .replace('{sourceLang}', sourceLang)
       .replace('{targetLang}', targetLang)
-      .replace('{text}', text);
+      .replace('{sourceText}', text);
   }
 
   /**
@@ -77,6 +77,8 @@ export class OllamaClient {
    */
   async translate(text: string, { sourceLang, targetLang, onProgress, maxRetries = MAX_RETRIES }: TranslateOptions): Promise<string> {
     const prompt = this.buildPrompt(text, { sourceLang, targetLang });
+
+    console.log('OllamaClient.translate called with prompt:', prompt);
 
     let lastError: Error = new Error('Unknown error');
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -149,6 +151,7 @@ export class OllamaClient {
    * @private
    */
   private async _callApi(prompt: string, onProgress?: (text: string) => void): Promise<string> {
+    console.log('OllamaClient._callApi called with prompt:', `${this.baseUrl}/v1/chat/completions`)
     const response = await this._fetch(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
