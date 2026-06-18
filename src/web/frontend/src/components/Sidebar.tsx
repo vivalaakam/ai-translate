@@ -83,9 +83,11 @@ function BookListItem({
   const pct = total > 0 ? Math.round((translated / total) * 100) : 0;
   const isComplete = book.completedAt !== null;
   const isTranslating = translated > 0 && !isComplete;
+  const isParsing = book.status === 'parsing';
+  const parsePct = book.totalPages > 0 ? Math.round((book.parsedPages / book.totalPages) * 100) : 0;
 
   const className = `book-item ${active ? 'active' : ''} ${
-    isComplete ? 'completed' : isTranslating ? 'translating' : ''
+    isComplete ? 'completed' : isTranslating ? 'translating' : isParsing ? 'translating' : ''
   }`;
 
   return (
@@ -94,6 +96,8 @@ function BookListItem({
         <div className="book-item-title">{book.title || book.filename}</div>
         {isComplete ? (
           <span className="badge completed">done</span>
+        ) : isParsing ? (
+          <span className="badge translating">parsing {parsePct}%</span>
         ) : isTranslating ? (
           <span className="badge translating">translating</span>
         ) : (
@@ -106,7 +110,15 @@ function BookListItem({
         <span>✅ {translated}</span>
         <span>🌍 {book.language || '?'}</span>
       </div>
-      {translated > 0 && (
+      {isParsing && book.totalPages > 0 && (
+        <div className="mini-bar">
+          <div
+            className="mini-bar-fill"
+            style={{ width: `${parsePct}%` }}
+          />
+        </div>
+      )}
+      {translated > 0 && !isParsing && (
         <div className="mini-bar">
           <div
             className={`mini-bar-fill ${isComplete ? 'completed' : ''}`}

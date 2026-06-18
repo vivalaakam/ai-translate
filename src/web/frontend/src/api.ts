@@ -52,4 +52,5 @@ export const api = {
   jobList: () => rpc<{ jobs: TranslationJob[] }>('job.list'),
   jobGet: (jobId: string) => rpc<TranslationJob>('job.get', { jobId }),
   jobDelete: (jobId: string) => rpc<{ deleted: boolean }>('job.delete', { jobId }),
+  taskList: (docId: string) => rpc<{ tasks: any[] }>('task.list', { docId }),
 };

@@ -1,17 +1,22 @@
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
+import { v4 as uuidv4 } from 'uuid';
 
 import { TranslateDb, generateBookId } from '../db/database.js';
 import { EpubParser } from '../parsers/epub-parser.js';
 import { Fb2Parser } from '../parsers/fb2-parser.js';
-import { PdfParser } from '../parsers/pdf-parser.js';
+import { PdfParser, getPdfInfo, renderPdfPage, markdownToHtml } from '../parsers/pdf-parser.js';
 import { assembleEpub } from '../parsers/epub-assembler.js';
 import { OllamaClient } from '../translators/ollama-client.js';
+import { OcrClient } from '../translators/ocr-client.js';
 import { extractAllBlocks } from '../parsers/block-extractor.js';
 import { JobQueue as JQStatic } from '../web/job-queue.js';
 import { JobQueue } from '../web/job-queue.js';
 import { parseProvider, ensureModelLoaded, unloadIfWeLoaded } from '../translators/model-manager.js';
-import type { TranslationJob, BookRecord, ParsedEpub } from '../types.js';
+import { OLLAMA_DEFAULT_URL, DEFAULT_OCR_MODEL, DEFAULT_API_KEY } from '../utils/constants.js';
+import type { TranslationJob, BookRecord, ParsedEpub, TaskRecord } from '../types.js';
+import { parse as parseHtml } from 'node-html-parser';
 
 /**
  * Parse a file into ParsedEpub based on its extension.
@@ -75,6 +80,49 @@ export async function runUpload(
       return existingBook;
     }
 
+    // ── PDF: async task-based parsing ────────────────────────
+    if (ext === '.pdf') {
+      const pdfMeta = getPdfInfo(job.inputPath);
+      const totalPages = pdfMeta.pageCount;
+
+      // Create doc record with status='parsing'
+      await db.insertBook({
+        id: bookId,
+        title: pdfMeta.title || path.basename(job.originalFilename, '.pdf'),
+        author: pdfMeta.author || '',
+        language: 'en',
+        filename: job.originalFilename,
+        totalBlocks: 0,
+        status: 'parsing',
+        totalPages,
+        parsedPages: 0,
+      });
+
+      // Create OCR tasks — one per page
+      const tasks = [];
+      for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+        tasks.push({
+          id: uuidv4(),
+          docId: bookId,
+          type: 'ocr_page',
+          pageNum,
+          totalPages,
+        });
+      }
+      await db.createTasks(tasks);
+
+      jobQueue.setMetadata(job.id, {
+        title: pdfMeta.title || path.basename(job.originalFilename, '.pdf'),
+        author: pdfMeta.author || '',
+        language: 'en',
+        format: 'pdf',
+      });
+      jobQueue.updateStatus(job.id, 'completed', `PDF queued for OCR: ${totalPages} pages`, 100);
+
+      return (await db.getBook(bookId))!;
+    }
+
+    // ── EPUB/FB2: synchronous parsing (as before) ────────────
     const parsed = await parseFile(job.inputPath, ext, {
       ollamaUrl: options?.ollamaUrl,
       apiKey: options?.apiKey,
@@ -97,6 +145,7 @@ export async function runUpload(
       language: parsed.metadata.language,
       filename: job.originalFilename,
       totalBlocks: blocks.length,
+      status: 'parsed',
     });
 
     // Store image files
@@ -288,6 +337,108 @@ export async function runTranslation(
         // Best-effort — don't fail the job on unload failure
       }
     }
+  }
+}
+
+/**
+ * Process a single OCR task: render PDF page → OCR → save content.
+ * Called by the task worker loop in server.ts.
+ *
+ * @param task - The task record from the DB
+ * @param inputPath - Path to the uploaded PDF file
+ * @param ollamaUrl - API base URL for the OCR model
+ * @param apiKey - API key for authentication
+ */
+export async function processOcrTask(
+  task: TaskRecord,
+  inputPath: string,
+  ollamaUrl: string,
+  apiKey: string,
+): Promise<void> {
+  const db = new TranslateDb();
+  try {
+    // Render the PDF page to PNG
+    const imgBuffer = renderPdfPage(inputPath, task.pageNum!);
+
+    // OCR the page
+    const ocrClient = new OcrClient({ baseUrl: ollamaUrl, apiKey });
+    const markdown = await ocrClient.extractPage(imgBuffer, 'image/png', task.pageNum!);
+
+    // Save content to task
+    await db.completeTask(task.id, markdown);
+
+    // Update doc progress
+    const counts = await db.getTaskCounts(task.docId);
+    await db.updateDocStatus(task.docId, 'parsing', { parsedPages: counts.completed });
+
+    // Check if all tasks are done
+    if (counts.completed + counts.failed >= counts.total && counts.processing === 0) {
+      await finalizeDocParsing(task.docId, inputPath);
+    }
+  } catch (err: any) {
+    await db.failTask(task.id, err.message || 'Unknown error');
+    // Check if all tasks are done even after failure
+    const counts = await db.getTaskCounts(task.docId);
+    if (counts.completed + counts.failed >= counts.total && counts.processing === 0) {
+      await finalizeDocParsing(task.docId, inputPath);
+    }
+  } finally {
+    await db.close();
+  }
+}
+
+/**
+ * Finalize document parsing after all OCR tasks are complete.
+ * Collects all task content, converts to ContentDocs, extracts blocks,
+ * and stores them in the DB.
+ *
+ * @param docId - Document ID
+ * @param inputPath - Path to the original PDF file
+ */
+export async function finalizeDocParsing(docId: string, inputPath: string): Promise<void> {
+  const db = new TranslateDb();
+  try {
+    const tasks = await db.getTasksByDoc(docId);
+    const completedTasks = tasks.filter(t => t.status === 'completed' && t.content);
+
+    if (completedTasks.length === 0) {
+      await db.updateDocStatus(docId, 'failed');
+      return;
+    }
+
+    // Build ContentDocs from task content (ordered by page number)
+    const contentDocs = completedTasks
+      .sort((a, b) => (a.pageNum ?? 0) - (b.pageNum ?? 0))
+      .map(t => {
+        const html = markdownToHtml(t.content!);
+        const dom = parseHtml(html, { comment: true, voidTag: { closingSlash: true } });
+        const docPath = `page-${String(t.pageNum ?? 0).padStart(4, '0')}.xhtml`;
+        return { path: docPath, dom, rawContent: html, sectionTitle: `Page ${t.pageNum}` };
+      });
+
+    // Extract blocks
+    const { blocks, files: imgFiles } = extractAllBlocks(contentDocs, docId, []);
+
+    // Update doc record with block count and status='parsed'
+    await db.updateDocStatus(docId, 'parsed', { parsedPages: completedTasks.length });
+
+    // Store files (if any images were extracted)
+    if (imgFiles.length > 0) {
+      await db.insertFiles(imgFiles);
+    }
+
+    // Store blocks
+    await db.insertBlocks(blocks);
+
+    // Update total_blocks
+    await db.updateTotalBlocks(docId, blocks.length);
+
+    console.log(`[finalizeDocParsing] Doc ${docId}: ${blocks.length} blocks from ${completedTasks.length} pages`);
+  } catch (err: any) {
+    console.error(`[finalizeDocParsing] Failed for doc ${docId}:`, err.message);
+    await db.updateDocStatus(docId, 'failed');
+  } finally {
+    await db.close();
   }
 }
 

@@ -4,7 +4,7 @@ import { v5 as uuidv5 } from 'uuid';
 import jsSha3 from 'js-sha3';
 const keccak256: (data: string | ArrayBuffer | Buffer) => string = (jsSha3 as any).keccak256;
 import { DATABASE_URL } from '../utils/constants.js';
-import type { Block, BookRecord, BlockType, FileRecord } from '../types.js';
+import type { Block, BookRecord, BlockType, FileRecord, TaskRecord } from '../types.js';
 
 // UUID v5 namespaces for deterministic IDs
 const BOOK_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
@@ -166,6 +166,21 @@ export class TranslateDb {
         FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL
       );
 
+      CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        doc_id TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'ocr_page',
+        page_num INTEGER,
+        total_pages INTEGER,
+        status TEXT NOT NULL DEFAULT 'pending',
+        content TEXT,
+        error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        completed_at TIMESTAMPTZ,
+        FOREIGN KEY (doc_id) REFERENCES docs(id) ON DELETE CASCADE
+      );
+
       CREATE INDEX IF NOT EXISTS idx_blocks_book_id ON blocks(book_id);
       CREATE INDEX IF NOT EXISTS idx_blocks_book_doc ON blocks(book_id, doc_path);
       CREATE INDEX IF NOT EXISTS idx_blocks_book_index ON blocks(book_id, block_index);
@@ -175,6 +190,16 @@ export class TranslateDb {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_blocks_translation_unique ON blocks(source_id, lang, model) WHERE source_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_files_book_id ON files(book_id);
       CREATE INDEX IF NOT EXISTS idx_files_original_path ON files(book_id, original_path);
+      CREATE INDEX IF NOT EXISTS idx_tasks_doc_id ON tasks(doc_id);
+      CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+      CREATE INDEX IF NOT EXISTS idx_tasks_doc_status ON tasks(doc_id, status);
+    `);
+
+    // Add new columns to docs table (idempotent — ADD COLUMN IF NOT EXISTS)
+    await this.pool.query(`
+      ALTER TABLE docs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'uploaded';
+      ALTER TABLE docs ADD COLUMN IF NOT EXISTS total_pages INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE docs ADD COLUMN IF NOT EXISTS parsed_pages INTEGER NOT NULL DEFAULT 0;
     `);
   }
 
@@ -182,8 +207,8 @@ export class TranslateDb {
 
   async insertBook(book: Partial<Omit<BookRecord, 'createdAt' | 'completedAt' | 'translatedBlocks'>> & { id: string; title: string; author: string; language: string; filename: string; totalBlocks: number; translatedBlocks?: number }): Promise<void> {
     await this.pool.query(`
-      INSERT INTO docs (id, title, author, language, filename, total_blocks, translated_blocks, target_lang, source_lang, model)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      INSERT INTO docs (id, title, author, language, filename, total_blocks, translated_blocks, target_lang, source_lang, model, status, total_pages, parsed_pages)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       ON CONFLICT (id) DO NOTHING
     `, [
       book.id,
@@ -196,6 +221,9 @@ export class TranslateDb {
       book.targetLang ?? null,
       book.sourceLang ?? null,
       book.model ?? null,
+      book.status ?? 'uploaded',
+      book.totalPages ?? 0,
+      book.parsedPages ?? 0,
     ]);
   }
 
@@ -508,6 +536,103 @@ export class TranslateDb {
     await this.pool.query('DELETE FROM files WHERE book_id = $1', [bookId]);
   }
 
+  // ─── Doc status ────────────────────────────────────────────
+
+  async updateDocStatus(docId: string, status: string, extra?: { totalPages?: number; parsedPages?: number }): Promise<void> {
+    if (extra?.totalPages !== undefined && extra?.parsedPages !== undefined) {
+      await this.pool.query('UPDATE docs SET status = $1, total_pages = $2, parsed_pages = $3 WHERE id = $4', [status, extra.totalPages, extra.parsedPages, docId]);
+    } else if (extra?.totalPages !== undefined) {
+      await this.pool.query('UPDATE docs SET status = $1, total_pages = $2 WHERE id = $3', [status, extra.totalPages, docId]);
+    } else if (extra?.parsedPages !== undefined) {
+      await this.pool.query('UPDATE docs SET status = $1, parsed_pages = $2 WHERE id = $3', [status, extra.parsedPages, docId]);
+    } else {
+      await this.pool.query('UPDATE docs SET status = $1 WHERE id = $2', [status, docId]);
+    }
+  }
+
+  async updateTotalBlocks(docId: string, totalBlocks: number): Promise<void> {
+    await this.pool.query('UPDATE docs SET total_blocks = $1 WHERE id = $2', [totalBlocks, docId]);
+  }
+
+  // ─── Task CRUD ─────────────────────────────────────────────
+
+  async createTasks(tasks: Array<{ id: string; docId: string; type: string; pageNum: number; totalPages: number }>): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const t of tasks) {
+        await client.query(`
+          INSERT INTO tasks (id, doc_id, type, page_num, total_pages, status)
+          VALUES ($1, $2, $3, $4, $5, 'pending')
+          ON CONFLICT (id) DO NOTHING
+        `, [t.id, t.docId, t.type, t.pageNum, t.totalPages]);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getNextTask(): Promise<TaskRecord | undefined> {
+    const { rows } = await this.pool.query(`
+      UPDATE tasks SET status = 'processing', updated_at = now()
+      WHERE id = (
+        SELECT id FROM tasks WHERE status = 'pending'
+        ORDER BY created_at ASC LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING *
+    `);
+    if (rows.length === 0) return undefined;
+    return this.mapTaskRow(rows[0]);
+  }
+
+  async completeTask(taskId: string, content: string): Promise<void> {
+    await this.pool.query(`
+      UPDATE tasks SET status = 'completed', content = $1, completed_at = now(), updated_at = now()
+      WHERE id = $2
+    `, [content, taskId]);
+  }
+
+  async failTask(taskId: string, error: string): Promise<void> {
+    await this.pool.query(`
+      UPDATE tasks SET status = 'failed', error = $1, completed_at = now(), updated_at = now()
+      WHERE id = $2
+    `, [error, taskId]);
+  }
+
+  async getTasksByDoc(docId: string): Promise<TaskRecord[]> {
+    const { rows } = await this.pool.query('SELECT * FROM tasks WHERE doc_id = $1 ORDER BY page_num', [docId]);
+    return rows.map((r: Record<string, any>) => this.mapTaskRow(r));
+  }
+
+  async getTaskCounts(docId: string): Promise<{ total: number; completed: number; failed: number; pending: number; processing: number }> {
+    const { rows } = await this.pool.query(`
+      SELECT
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE status = 'completed') as completed,
+        COUNT(*) FILTER (WHERE status = 'failed') as failed,
+        COUNT(*) FILTER (WHERE status = 'pending') as pending,
+        COUNT(*) FILTER (WHERE status = 'processing') as processing
+      FROM tasks WHERE doc_id = $1
+    `, [docId]);
+    return {
+      total: parseInt(rows[0].total),
+      completed: parseInt(rows[0].completed),
+      failed: parseInt(rows[0].failed),
+      pending: parseInt(rows[0].pending),
+      processing: parseInt(rows[0].processing),
+    };
+  }
+
+  async countProcessingTasks(): Promise<number> {
+    const { rows } = await this.pool.query(`SELECT COUNT(*) as cnt FROM tasks WHERE status = 'processing'`);
+    return parseInt(rows[0].cnt);
+  }
+
   // ─── General ───────────────────────────────────────────────
 
   async close(): Promise<void> {
@@ -541,6 +666,9 @@ export class TranslateDb {
       model: row.model,
       createdAt: row.created_at,
       completedAt: row.completed_at,
+      status: row.status ?? 'uploaded',
+      totalPages: row.total_pages ?? 0,
+      parsedPages: row.parsed_pages ?? 0,
     };
   }
 
@@ -569,6 +697,22 @@ export class TranslateDb {
       mimeType: row.mime_type,
       data: row.data,
       createdAt: row.created_at,
+    };
+  }
+
+  private mapTaskRow(row: Record<string, any>): TaskRecord {
+    return {
+      id: row.id,
+      docId: row.doc_id,
+      type: row.type,
+      pageNum: row.page_num,
+      totalPages: row.total_pages,
+      status: row.status,
+      content: row.content,
+      error: row.error,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      completedAt: row.completed_at,
     };
   }
 }

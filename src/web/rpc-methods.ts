@@ -178,6 +178,16 @@ const SCHEMAS: RpcMethodSchema[] = [
 
   // ── Jobs ────────────────────────────────────────────────────────
   {
+    method: 'task.list',
+    description: 'List OCR tasks for a document (PDF page processing status)',
+    params: {
+      docId: { type: 'string', description: 'Document ID', required: true },
+    },
+    result: { type: 'object', description: 'Task list', properties: {
+      tasks: { type: 'array', description: 'Array of task records with status and page info' },
+    }},
+  },
+  {
     method: 'job.list',
     description: 'List all translation jobs (most recent first)',
     params: {},
@@ -410,6 +420,18 @@ export function registerMethods(router: JsonRpcRouter, deps: {
         url: `/files/${f.id}`,
       }));
       return { ...book, blockCounts: counts, chapters, images };
+    } finally {
+      await db.close();
+    }
+  });
+
+  router.register('task.list', async (params, _ctx) => {
+    const db = new TranslateDb(dbPath);
+    try {
+      if (params.docId) {
+        return { tasks: await db.getTasksByDoc(params.docId) };
+      }
+      return { tasks: [] };
     } finally {
       await db.close();
     }

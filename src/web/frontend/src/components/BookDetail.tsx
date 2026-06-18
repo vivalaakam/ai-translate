@@ -34,6 +34,8 @@ export function BookDetail({
   const pct = total > 0 ? Math.round((translated / total) * 100) : 0;
   const isComplete = detail.completedAt !== null;
   const isTranslating = translated > 0 && !isComplete;
+  const isParsing = detail.status === 'parsing';
+  const parsePct = detail.totalPages > 0 ? Math.round((detail.parsedPages / detail.totalPages) * 100) : 0;
 
   const handleTranslate = useCallback(async () => {
     if (!targetLang) return;
@@ -76,7 +78,7 @@ export function BookDetail({
     } catch {}
   }, [detail.id, onDelete]);
 
-  const showTranslateSection = !config.uploadOnly && !isComplete;
+  const showTranslateSection = !config.uploadOnly && !isComplete && !isParsing;
   const showExportTranslated = translated > 0;
 
   return (
@@ -91,10 +93,23 @@ export function BookDetail({
           <span>📦 {detail.filename?.split('.').pop() || '?'}</span>
           {isComplete && <span className="badge completed">✓ complete</span>}
           {isTranslating && <span className="badge translating">translating</span>}
-          {!isComplete && !isTranslating && <span className="badge queued">parsed</span>}
+          {isParsing && <span className="badge translating">parsing {parsePct}%</span>}
+          {!isComplete && !isTranslating && !isParsing && <span className="badge queued">parsed</span>}
         </div>
 
-        {translated > 0 && (
+        {isParsing && detail.totalPages > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div className="progress-text">
+              <span>OCR: {detail.parsedPages} / {detail.totalPages} pages</span>
+              <span>{parsePct}%</span>
+            </div>
+            <div className="progress-bar">
+              <div className="progress-fill" style={{ width: `${parsePct}%` }} />
+            </div>
+          </div>
+        )}
+
+        {translated > 0 && !isParsing && (
           <div style={{ marginTop: 12 }}>
             <div className="progress-text">
               <span>{translated} / {total} blocks</span>

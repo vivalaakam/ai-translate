@@ -10,6 +10,7 @@ import { JsonRpcRouter, RPC_ERRORS } from './jsonrpc.js';
 import type { JsonRpcRequest, JsonRpcResponse } from './jsonrpc.js';
 import { registerMethods } from './rpc-methods.js';
 import { TranslateDb } from '../db/database.js';
+import { processOcrTask } from './pipeline.js';
 import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER, UPLOAD_ONLY } from '../utils/constants.js';
 import type { TranslationJob } from '../types.js';
 
@@ -43,6 +44,13 @@ interface WSClient {
 }
 const wsClients: Set<WSClient> = new Set();
 
+// Config for the task worker (set in createApp, used in startServer)
+let _workerConfig: { ollamaUrl: string; apiKey: string; dbPath?: string } = {
+  ollamaUrl: OLLAMA_DEFAULT_URL,
+  apiKey: DEFAULT_API_KEY,
+  dbPath: undefined,
+};
+
 /**
  * Create and configure the Express app + WebSocket server + JSON-RPC router.
  */
@@ -59,6 +67,9 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
   const apiKey = options?.apiKey || DEFAULT_API_KEY;
   const provider = options?.provider || DEFAULT_LLM_PROVIDER;
   const dbPath = options?.dbPath;
+
+  // Store config for task worker
+  _workerConfig = { ollamaUrl, apiKey, dbPath };
 
   // Job queue with WebSocket broadcast
   const jobQueue = new JobQueue((job) => {
@@ -290,6 +301,58 @@ export async function startServer(port: number = DEFAULT_PORT, options?: { ollam
     }
     console.log(`   WebSocket: ws://localhost:${port}/ws`);
   });
+
+  // ── Task worker: process pending OCR tasks ──────────────────
+  const workerInterval = setInterval(async () => {
+    try {
+      const db = new TranslateDb(_workerConfig.dbPath);
+      try {
+        // Limit concurrent processing to 1 task at a time
+        const processing = await db.countProcessingTasks();
+        if (processing > 0) return;
+
+        const task = await db.getNextTask();
+        if (!task) return;
+
+        // Find the uploaded file path for this doc
+        const doc = await db.getBook(task.docId);
+        if (!doc) {
+          await db.failTask(task.id, 'Doc not found');
+          return;
+        }
+
+        // Find the upload file — check jobQueue first, then .uploads dir
+        let inputPath: string | null = null;
+        const jobQueueJobs = jobQueue.list();
+        const uploadJob = jobQueueJobs.find(j => j.originalFilename === doc.filename);
+        if (uploadJob) {
+          inputPath = uploadJob.inputPath;
+        }
+        if (!inputPath || !fs.existsSync(inputPath)) {
+          // Try to find in .uploads directory
+          const uploadDir = JobQueue.getUploadDir();
+          const files = fs.readdirSync(uploadDir);
+          const match = files.find(f => f.endsWith(path.extname(doc.filename)));
+          if (match) {
+            inputPath = path.join(uploadDir, match);
+          }
+        }
+        if (!inputPath || !fs.existsSync(inputPath)) {
+          await db.failTask(task.id, 'Input file not found');
+          return;
+        }
+
+        // Process task asynchronously (don't block the worker loop)
+        processOcrTask(task, inputPath, _workerConfig.ollamaUrl, _workerConfig.apiKey).catch(err => {
+          console.error(`[worker] Task ${task.id} failed:`, err.message);
+        });
+      } finally {
+        await db.close();
+      }
+    } catch {
+      // Ignore worker errors — don't crash the server
+    }
+  }, 3000); // Poll every 3 seconds
 
   // Cleanup old jobs every hour
   setInterval(() => {
