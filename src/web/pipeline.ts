@@ -397,37 +397,49 @@ export async function processOcrTask(
   try {
     // ── Ensure OCR model is loaded (LM Studio) ────────────────
     if (parsedProvider === 'lmstudio' && !_loadedOcrModels.has(ocrModel)) {
+      console.log(`[ocr] Loading model "${ocrModel}" into LM Studio (provider=${parsedProvider})...`);
       modelLoadedByUs = ensureModelLoaded(ocrModel, parsedProvider);
       _loadedOcrModels.add(ocrModel);
       console.log(`[ocr] Model "${ocrModel}" ${modelLoadedByUs ? 'loaded into LM Studio' : 'already loaded'}`);
     }
 
     // Render the PDF page to PNG
+    console.log(`[ocr] Task ${task.id}: rendering page ${task.pageNum} from ${inputPath}...`);
     const imgBuffer = renderPdfPage(inputPath, task.pageNum!);
+    console.log(`[ocr] Task ${task.id}: page ${task.pageNum} rendered, ${imgBuffer.length} bytes`);
 
     // OCR the page
+    console.log(`[ocr] Task ${task.id}: calling OCR API (model=${ocrModel}, url=${ollamaUrl})...`);
     const ocrClient = new OcrClient({ baseUrl: ollamaUrl, model: ocrModel, apiKey });
     const markdown = await ocrClient.extractPage(imgBuffer, 'image/png', task.pageNum!);
+    console.log(`[ocr] Task ${task.id}: OCR done, ${markdown.length} chars extracted`);
 
     // Save content to task
     await db.completeTask(task.id, markdown);
+    console.log(`[ocr] Task ${task.id}: completed, content saved`);
 
     // Update doc progress
     const counts = await db.getTaskCounts(task.docId);
     await db.updateDocStatus(task.docId, 'parsing', { parsedPages: counts.completed });
+    console.log(`[ocr] Doc ${task.docId}: ${counts.completed}/${counts.total} pages done (${counts.failed} failed)`);
 
     // Check if all tasks are done
     if (counts.completed + counts.failed >= counts.total && counts.processing === 0) {
+      console.log(`[ocr] Doc ${task.docId}: all tasks done, finalizing...`);
       await finalizeDocParsing(task.docId, inputPath);
     }
 
     // ── Unload OCR model if no more ocr_page tasks pending ──
     await maybeUnloadOcrModels(db);
   } catch (err: any) {
+    console.error(`[ocr] Task ${task.id} FAILED: ${err.message}`);
+    if (err.stack) console.error(err.stack);
     await db.failTask(task.id, err.message || 'Unknown error');
+    console.error(`[ocr] Task ${task.id}: marked as failed in DB`);
     // Check if all tasks are done even after failure
     const counts = await db.getTaskCounts(task.docId);
     if (counts.completed + counts.failed >= counts.total && counts.processing === 0) {
+      console.log(`[ocr] Doc ${task.docId}: all tasks done (after failure), finalizing...`);
       await finalizeDocParsing(task.docId, inputPath);
     }
     // ── Unload OCR model if no more ocr_page tasks pending ──

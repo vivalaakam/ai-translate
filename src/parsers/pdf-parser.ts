@@ -81,11 +81,14 @@ export function renderPdfPage(filePath: string, pageNum: number, dpi: number = D
     // Find the generated PNG file
     const files = fs.readdirSync(tmpDir).filter(f => f.endsWith('.png'));
     if (files.length === 0) {
-      throw new Error(`Failed to render page ${pageNum}: no PNG generated`);
+      throw new Error(`Failed to render page ${pageNum}: no PNG generated (pdftoppm produced no files)`);
     }
     const pngPath = path.join(tmpDir, files[0]);
     const buffer = fs.readFileSync(pngPath);
     return buffer;
+  } catch (err: any) {
+    console.error(`[pdf-render] Failed to render page ${pageNum} from ${filePath}: ${err.message}`);
+    throw err;
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

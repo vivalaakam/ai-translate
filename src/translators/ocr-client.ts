@@ -92,6 +92,25 @@ export class OcrClient {
   async extractPage(imageBuffer: Buffer, mimeType: string, pageNumber: number): Promise<string> {
     const base64 = imageBuffer.toString('base64');
     const dataUrl = `data:${mimeType};base64,${base64}`;
+    const bodySizeMB = (JSON.stringify({
+      model: this.model,
+      messages: [
+        { role: 'system', content: OCR_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: `Extract all text from this page (page ${pageNumber}). Output only the Markdown text.` },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ],
+        },
+      ],
+      temperature: 0.1,
+      max_tokens: 4096,
+      stream: false,
+    }).length / 1024 / 1024).toFixed(2);
+
+    console.log(`[ocr-client] extractPage: page=${pageNumber}, image=${imageBuffer.length} bytes, base64=${base64.length} chars, request body ~${bodySizeMB}MB`);
+    console.log(`[ocr-client] POST ${this.baseUrl}/v1/chat/completions (model=${this.model})`);
 
     const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
@@ -118,8 +137,11 @@ export class OcrClient {
       signal: AbortSignal.timeout(OCR_REQUEST_TIMEOUT_MS),
     });
 
+    console.log(`[ocr-client] Response: status=${response.status} ${response.statusText}`);
+
     if (!response.ok) {
       const errorBody = await response.text();
+      console.error(`[ocr-client] API error body: ${errorBody.slice(0, 500)}`);
       throw new Error(`OCR API error (${response.status}): ${errorBody}`);
     }
 
@@ -130,6 +152,10 @@ export class OcrClient {
     };
 
     const text = data.choices?.[0]?.message?.content?.trim() || '';
+    console.log(`[ocr-client] Extracted ${text.length} chars from page ${pageNumber}`);
+    if (text.length === 0) {
+      console.warn(`[ocr-client] Empty response for page ${pageNumber}. Full response:`, JSON.stringify(data).slice(0, 500));
+    }
     return text;
   }
 

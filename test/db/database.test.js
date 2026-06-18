@@ -678,9 +678,13 @@ describe('Task CRUD', () => {
       { id: 'task-next-2', docId: 'test-doc-next', type: 'ocr_page', pageNum: 2, totalPages: 2 },
     ]);
 
+    // Clean up any stray pending tasks from other tests
+    await db.raw.query(`UPDATE tasks SET status = 'cancelled' WHERE doc_id != 'test-doc-next' AND status = 'pending'`);
+
     const task = await db.getNextTask();
     expect(task).toBeDefined();
     expect(task.status).toBe('processing');
+    expect(task.docId).toBe('test-doc-next');
     expect(task.pageNum).toBe(1);
 
     // Next call should get the second task
@@ -708,7 +712,12 @@ describe('Task CRUD', () => {
       { id: 'task-complete-1', docId: 'test-doc-complete', type: 'ocr_page', pageNum: 1, totalPages: 1 },
     ]);
 
+    // Clean up any stray pending tasks from other tests
+    await db.raw.query(`UPDATE tasks SET status = 'cancelled' WHERE doc_id != 'test-doc-complete' AND status = 'pending'`);
+
     const task = await db.getNextTask();
+    expect(task).toBeDefined();
+    expect(task.id).toBe('task-complete-1');
     await db.completeTask(task.id, '# Heading\n\nParagraph text');
 
     const tasks = await db.getTasksByDoc('test-doc-complete');
@@ -731,7 +740,12 @@ describe('Task CRUD', () => {
       { id: 'task-fail-1', docId: 'test-doc-fail', type: 'ocr_page', pageNum: 1, totalPages: 1 },
     ]);
 
+    // Clean up any stray pending tasks from other tests
+    await db.raw.query(`UPDATE tasks SET status = 'cancelled' WHERE doc_id != 'test-doc-fail' AND status = 'pending'`);
+
     const task = await db.getNextTask();
+    expect(task).toBeDefined();
+    expect(task.id).toBe('task-fail-1');
     await db.failTask(task.id, 'OCR failed');
 
     const tasks = await db.getTasksByDoc('test-doc-fail');

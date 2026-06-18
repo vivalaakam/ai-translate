@@ -581,7 +581,8 @@ export class TranslateDb {
       UPDATE tasks SET status = 'processing', updated_at = now()
       WHERE id = (
         SELECT id FROM tasks WHERE status = 'pending'
-        ORDER BY created_at ASC LIMIT 1
+        ORDER BY doc_id ASC, page_num ASC
+        LIMIT 1
         FOR UPDATE SKIP LOCKED
       )
       RETURNING *

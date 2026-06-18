@@ -316,9 +316,12 @@ export async function startServer(port: number = DEFAULT_PORT, options?: { ollam
         const task = await db.getNextTask();
         if (!task) return;
 
+        console.log(`[worker] Picked up task ${task.id} (doc=${task.docId}, page=${task.pageNum}/${task.totalPages})`);
+
         // Find the uploaded file path for this doc
         const doc = await db.getBook(task.docId);
         if (!doc) {
+          console.error(`[worker] Doc ${task.docId} not found for task ${task.id}`);
           await db.failTask(task.id, 'Doc not found');
           return;
         }
@@ -340,19 +343,22 @@ export async function startServer(port: number = DEFAULT_PORT, options?: { ollam
           }
         }
         if (!inputPath || !fs.existsSync(inputPath)) {
+          console.error(`[worker] Input file not found for doc ${task.docId} (filename=${doc.filename})`);
           await db.failTask(task.id, 'Input file not found');
           return;
         }
 
+        console.log(`[worker] Starting OCR for task ${task.id}, file=${inputPath}, model=${_workerConfig.ocrModel}, url=${_workerConfig.ollamaUrl}`);
+
         // Process task asynchronously (don't block the worker loop)
         processOcrTask(task, inputPath, _workerConfig.ollamaUrl, _workerConfig.apiKey, _workerConfig.ocrModel, _workerConfig.provider).catch(err => {
-          console.error(`[worker] Task ${task.id} failed:`, err.message);
+          console.error(`[worker] Task ${task.id} uncaught error:`, err.message, err.stack);
         });
       } finally {
         await db.close();
       }
-    } catch {
-      // Ignore worker errors — don't crash the server
+    } catch (err: any) {
+      console.error(`[worker] Poll error:`, err.message);
     }
   }, 3000); // Poll every 3 seconds
 

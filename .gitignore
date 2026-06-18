@@ -7,5 +7,6 @@ dist/
 *.fb2
 *.zip
 .env
+.idea
 test/fixtures/output/
 tmp/*.epub
