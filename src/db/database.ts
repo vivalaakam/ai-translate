@@ -95,7 +95,7 @@ function getPool(connectionString?: string): Pool {
 }
 
 /**
- * PostgreSQL database manager for books, blocks, and files.
+ * PostgreSQL database manager for docs, blocks, and files.
  *
  * The blocks table stores both originals and translations:
  *   - Original: lang = source lang, model = NULL, source_id = NULL
@@ -112,8 +112,18 @@ export class TranslateDb {
    * Run database migrations (idempotent — safe to call on every startup).
    */
   async migrate(): Promise<void> {
+    // Migrate: rename books → docs (for existing databases)
     await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS books (
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'books') THEN
+          ALTER TABLE books RENAME TO docs;
+        END IF;
+      END $$;
+    `);
+
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS docs (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         author TEXT NOT NULL DEFAULT '',
@@ -135,7 +145,7 @@ export class TranslateDb {
         mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
         data BYTEA NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+        FOREIGN KEY (book_id) REFERENCES docs(id) ON DELETE CASCADE
       );
 
       CREATE TABLE IF NOT EXISTS blocks (
@@ -152,7 +162,7 @@ export class TranslateDb {
         tag_name TEXT NOT NULL DEFAULT 'p',
         attributes TEXT NOT NULL DEFAULT '{}',
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+        FOREIGN KEY (book_id) REFERENCES docs(id) ON DELETE CASCADE,
         FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL
       );
 
@@ -168,11 +178,11 @@ export class TranslateDb {
     `);
   }
 
-  // ─── Book CRUD ─────────────────────────────────────────────
+  // ─── Doc CRUD ─────────────────────────────────────────────
 
   async insertBook(book: Partial<Omit<BookRecord, 'createdAt' | 'completedAt' | 'translatedBlocks'>> & { id: string; title: string; author: string; language: string; filename: string; totalBlocks: number; translatedBlocks?: number }): Promise<void> {
     await this.pool.query(`
-      INSERT INTO books (id, title, author, language, filename, total_blocks, translated_blocks, target_lang, source_lang, model)
+      INSERT INTO docs (id, title, author, language, filename, total_blocks, translated_blocks, target_lang, source_lang, model)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       ON CONFLICT (id) DO NOTHING
     `, [
@@ -190,36 +200,36 @@ export class TranslateDb {
   }
 
   async getBook(id: string): Promise<BookRecord | undefined> {
-    const { rows } = await this.pool.query('SELECT * FROM books WHERE id = $1', [id]);
+    const { rows } = await this.pool.query('SELECT * FROM docs WHERE id = $1', [id]);
     if (rows.length === 0) return undefined;
     return this.mapBookRow(rows[0]);
   }
 
   async updateBookProgress(bookId: string, translatedBlocks: number): Promise<void> {
-    await this.pool.query('UPDATE books SET translated_blocks = $1 WHERE id = $2', [translatedBlocks, bookId]);
+    await this.pool.query('UPDATE docs SET translated_blocks = $1 WHERE id = $2', [translatedBlocks, bookId]);
   }
 
   async completeBook(bookId: string): Promise<void> {
     await this.pool.query(`
-      UPDATE books SET completed_at = now(), translated_blocks = total_blocks WHERE id = $1
+      UPDATE docs SET completed_at = now(), translated_blocks = total_blocks WHERE id = $1
     `, [bookId]);
   }
 
   async setBookTranslationConfig(bookId: string, targetLang: string, sourceLang: string, model: string): Promise<void> {
     await this.pool.query(`
-      UPDATE books SET target_lang = $1, source_lang = $2, model = $3 WHERE id = $4
+      UPDATE docs SET target_lang = $1, source_lang = $2, model = $3 WHERE id = $4
     `, [targetLang, sourceLang, model, bookId]);
   }
 
   async listBooks(): Promise<BookRecord[]> {
-    const { rows } = await this.pool.query('SELECT * FROM books ORDER BY created_at DESC');
+    const { rows } = await this.pool.query('SELECT * FROM docs ORDER BY created_at DESC');
     return rows.map((r: Record<string, any>) => this.mapBookRow(r));
   }
 
   async deleteBook(bookId: string): Promise<void> {
     await this.pool.query('DELETE FROM blocks WHERE book_id = $1', [bookId]);
     await this.pool.query('DELETE FROM files WHERE book_id = $1', [bookId]);
-    await this.pool.query('DELETE FROM books WHERE id = $1', [bookId]);
+    await this.pool.query('DELETE FROM docs WHERE id = $1', [bookId]);
   }
 
   // ─── Block CRUD ────────────────────────────────────────────

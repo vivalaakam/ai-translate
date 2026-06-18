@@ -26,13 +26,13 @@ beforeAll(async () => {
   // Clean any leftover e2e test data
   await db.raw.query(`DELETE FROM blocks WHERE book_id IN ('e2e-image-test-book','e2e-image-para-test')`);
   await db.raw.query(`DELETE FROM files WHERE book_id IN ('e2e-image-test-book','e2e-image-para-test')`);
-  await db.raw.query(`DELETE FROM books WHERE id IN ('e2e-image-test-book','e2e-image-para-test')`);
+  await db.raw.query(`DELETE FROM docs WHERE id IN ('e2e-image-test-book','e2e-image-para-test')`);
 });
 
 afterAll(async () => {
   await db.raw.query(`DELETE FROM blocks WHERE book_id IN ('e2e-image-test-book','e2e-image-para-test')`);
   await db.raw.query(`DELETE FROM files WHERE book_id IN ('e2e-image-test-book','e2e-image-para-test')`);
-  await db.raw.query(`DELETE FROM books WHERE id IN ('e2e-image-test-book','e2e-image-para-test')`);
+  await db.raw.query(`DELETE FROM docs WHERE id IN ('e2e-image-test-book','e2e-image-para-test')`);
   await db.close();
   await TranslateDb.closePool();
   fs.rmSync(tmpDir, { recursive: true });

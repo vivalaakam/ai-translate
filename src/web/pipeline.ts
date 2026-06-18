@@ -4,13 +4,39 @@ import fs from 'fs';
 import { TranslateDb, generateBookId } from '../db/database.js';
 import { EpubParser } from '../parsers/epub-parser.js';
 import { Fb2Parser } from '../parsers/fb2-parser.js';
+import { PdfParser } from '../parsers/pdf-parser.js';
 import { assembleEpub } from '../parsers/epub-assembler.js';
 import { OllamaClient } from '../translators/ollama-client.js';
 import { extractAllBlocks } from '../parsers/block-extractor.js';
 import { JobQueue as JQStatic } from '../web/job-queue.js';
 import { JobQueue } from '../web/job-queue.js';
 import { parseProvider, ensureModelLoaded, unloadIfWeLoaded } from '../translators/model-manager.js';
-import type { TranslationJob, BookRecord } from '../types.js';
+import type { TranslationJob, BookRecord, ParsedEpub } from '../types.js';
+
+/**
+ * Parse a file into ParsedEpub based on its extension.
+ * Handles EPUB, FB2, and PDF (via OCR).
+ */
+async function parseFile(
+  inputPath: string,
+  ext: string,
+  options: { ollamaUrl?: string; apiKey?: string; onProgress?: (current: number, total: number) => void },
+): Promise<ParsedEpub> {
+  if (ext === '.epub') {
+    const parser = new EpubParser(inputPath);
+    return await parser.parse();
+  } else if (ext === '.fb2') {
+    const parser = new Fb2Parser(inputPath);
+    return await parser.parse();
+  } else if (ext === '.pdf') {
+    const parser = new PdfParser(inputPath, {
+      ollamaUrl: options.ollamaUrl,
+      apiKey: options.apiKey,
+    });
+    return await parser.parse(options.onProgress);
+  }
+  throw new Error(`Unsupported file format: ${ext}`);
+}
 
 /**
  * Upload a book: parse + extract blocks → store in PostgreSQL.
@@ -21,7 +47,7 @@ import type { TranslationJob, BookRecord } from '../types.js';
 export async function runUpload(
   job: TranslationJob,
   jobQueue: JobQueue,
-  options?: { dbPath?: string },
+  options?: { dbPath?: string; ollamaUrl?: string; apiKey?: string },
 ): Promise<BookRecord> {
   const db = new TranslateDb(options?.dbPath);
 
@@ -49,16 +75,14 @@ export async function runUpload(
       return existingBook;
     }
 
-    let parsed;
-    if (ext === '.epub') {
-      const parser = new EpubParser(job.inputPath);
-      parsed = await parser.parse();
-    } else if (ext === '.fb2') {
-      const parser = new Fb2Parser(job.inputPath);
-      parsed = await parser.parse();
-    } else {
-      throw new Error(`Unsupported file format: ${ext}`);
-    }
+    const parsed = await parseFile(job.inputPath, ext, {
+      ollamaUrl: options?.ollamaUrl,
+      apiKey: options?.apiKey,
+      onProgress: (current, total) => {
+        const pct = 5 + Math.round((current / total) * 20);
+        jobQueue.updateStatus(job.id, 'parsing', `OCR page ${current}/${total}...`, pct);
+      },
+    });
 
     // ── Extract blocks + images ──────────────────────────────
     jobQueue.updateStatus(job.id, 'parsing', 'Extracting blocks...', 30);
@@ -151,16 +175,14 @@ export async function runTranslation(
       return;
     }
 
-    let parsed;
-    if (ext === '.epub') {
-      const parser = new EpubParser(job.inputPath);
-      parsed = await parser.parse();
-    } else if (ext === '.fb2') {
-      const parser = new Fb2Parser(job.inputPath);
-      parsed = await parser.parse();
-    } else {
-      throw new Error(`Unsupported file format: ${ext}`);
-    }
+    const parsed = await parseFile(job.inputPath, ext, {
+      ollamaUrl: ollamaUrl,
+      apiKey: apiKey,
+      onProgress: (current, total) => {
+        const pct = 5 + Math.round((current / total) * 5);
+        jobQueue.updateStatus(job.id, 'parsing', `OCR page ${current}/${total}...`, pct);
+      },
+    });
 
     // ── Step 2: Extract blocks + images ────────────────────────
     jobQueue.updateStatus(job.id, 'parsing', 'Extracting blocks...', 8);

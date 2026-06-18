@@ -16,7 +16,7 @@ afterAll(async () => {
   // Clean up any leftover test data, then close.
   await db.raw.query(`DELETE FROM blocks WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
   await db.raw.query(`DELETE FROM files WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
-  await db.raw.query(`DELETE FROM books WHERE id LIKE 'test-%' OR id LIKE 'book-%'`);
+  await db.raw.query(`DELETE FROM docs WHERE id LIKE 'test-%' OR id LIKE 'book-%'`);
   await db.close();
   await TranslateDb.closePool();
 });
@@ -25,7 +25,7 @@ afterAll(async () => {
 async function cleanup() {
   await db.raw.query(`DELETE FROM blocks WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
   await db.raw.query(`DELETE FROM files WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
-  await db.raw.query(`DELETE FROM books WHERE id LIKE 'test-%' OR id LIKE 'book-%'`);
+  await db.raw.query(`DELETE FROM docs WHERE id LIKE 'test-%' OR id LIKE 'book-%'`);
 }
 
 describe('TranslateDb', () => {
@@ -37,7 +37,7 @@ describe('TranslateDb', () => {
       `SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`,
     );
     const names = rows.map((r) => r.tablename);
-    expect(names).toContain('books');
+    expect(names).toContain('docs');
     expect(names).toContain('blocks');
     expect(names).toContain('files');
   });

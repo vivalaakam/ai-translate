@@ -26,7 +26,7 @@ export function Sidebar({
     <aside className="sidebar">
       <div className="sidebar-header">
         <h1>📚 AI Translate</h1>
-        <div className="subtitle">EPUB & FB2 Translator</div>
+        <div className="subtitle">EPUB & FB2 & PDF Translator</div>
       </div>
 
       <div className="sidebar-upload">

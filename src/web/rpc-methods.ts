@@ -286,7 +286,7 @@ export function registerMethods(router: JsonRpcRouter, deps: {
       model: '',
     });
 
-    runUpload(job, jobQueue, { dbPath }).then((bookRecord) => {
+    runUpload(job, jobQueue, { dbPath, ollamaUrl, apiKey }).then((bookRecord) => {
       job.metadata = {
         title: bookRecord.title,
         author: bookRecord.author,

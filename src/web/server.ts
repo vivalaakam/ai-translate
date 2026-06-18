@@ -27,10 +27,10 @@ const upload = multer({
   storage,
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (ext === '.epub' || ext === '.fb2') {
+    if (ext === '.epub' || ext === '.fb2' || ext === '.pdf') {
       cb(null, true);
     } else {
-      cb(new Error('Only .epub and .fb2 files are allowed'));
+      cb(new Error('Only .epub, .fb2 and .pdf files are allowed'));
     }
   },
   limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
