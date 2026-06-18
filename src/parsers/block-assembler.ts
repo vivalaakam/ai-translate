@@ -70,7 +70,7 @@ function headingLevel(mdText: string): string {
 
 /**
  * Convert a single Block back to an HTML string.
- * Uses translatedMd if available, falls back to originalMd.
+ * Uses translatedContent if available, falls back to content.
  *
  * @param block - Block to convert
  * @param db - Optional database for resolving file references
@@ -79,7 +79,7 @@ function headingLevel(mdText: string): string {
  *                       If not provided, uses /files/ID web paths.
  */
 export function blockToHtml(block: Block, db?: TranslateDb, bookId?: string, fileResolver?: (fileId: string) => string): string {
-  const mdText = block.translatedMd ?? block.originalMd;
+  const mdText = block.translatedContent ?? block.content;
   let tagName = block.tagName || TYPE_TO_TAG[block.type] || 'p';
 
   // For headings, detect level from Markdown syntax

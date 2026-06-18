@@ -2,7 +2,7 @@
  * EPUB Assembler — builds a valid EPUB file from database blocks + files.
  *
  * Unlike EpubWriter (which patches an existing ZIP), this creates an EPUB
- * from scratch using only the data stored in SQLite. This allows exporting
+ * from scratch using only the data stored in PostgreSQL. This allows exporting
  * both original and translated versions without needing the original file.
  *
  * Output structure:
@@ -26,7 +26,7 @@ import type { BookRecord, Block, FileRecord } from '../types.js';
 import { assembleDocHtml } from './block-assembler.js';
 
 export interface AssembleOptions {
-  /** 'original' uses originalMd, 'translated' uses translatedMd (fallback: originalMd) */
+  /** 'original' uses content, 'translated' uses translatedContent (fallback: content) */
   mode: 'original' | 'translated';
   /** Language code for the output EPUB (default: source language) */
   lang?: string;
@@ -40,19 +40,22 @@ export interface AssembleOptions {
  * @param outputPath - Where to write the .epub file
  * @param options - Assembly mode and language
  */
-export function assembleEpub(
+export async function assembleEpub(
   bookId: string,
   db: TranslateDb,
   outputPath: string,
   options: AssembleOptions = { mode: 'translated' },
-): void {
-  const book = db.getBook(bookId);
+): Promise<void> {
+  const book = await db.getBook(bookId);
   if (!book) throw new Error(`Book not found: ${bookId}`);
 
   // Gather data from DB
-  const allBlocks = db.getBlocksByBook(bookId);
-  const docPaths = db.getDocPaths(bookId);
-  const files = db.getFilesByBook(bookId);
+  const targetLang = options.mode === 'translated' ? (options.lang || book.targetLang || 'en') : undefined;
+  const allBlocks = targetLang
+    ? await db.getBlocksByBookWithTranslations(bookId, targetLang, book.model ?? undefined)
+    : await db.getBlocksByBook(bookId);
+  const docPaths = await db.getDocPaths(bookId);
+  const files = await db.getFilesByBook(bookId);
 
   // Build a path mapping: original image path → file ID
   // Keys include the original_path and variations (basename, relative paths)
@@ -71,13 +74,10 @@ export function assembleEpub(
     }
   }
 
-  // If mode is 'translated', swap originalMd ↔ translatedMd so assembler uses translated
-  if (options.mode === 'translated') {
+  // If mode is 'original', strip translations so assembler uses content
+  if (options.mode === 'original') {
     for (const block of allBlocks) {
-      if (block.translatedMd !== null) {
-        // blockToHtml already prefers translatedMd over originalMd
-        // No swap needed — assembler picks translatedMd ?? originalMd
-      }
+      block.translatedContent = null;
     }
   }
 
@@ -116,20 +116,20 @@ export function assembleEpub(
     // Use translated text if mode is 'translated' and translation exists
     const blocksForAssembly = options.mode === 'translated'
       ? docBlocks
-      : docBlocks.map(b => ({ ...b, translatedMd: null })); // force original
+      : docBlocks.map(b => ({ ...b, translatedContent: null })); // force original
 
     // Find a title from heading blocks, skipping trivial ones
     let chapterTitle = '';
     const headings = blocksForAssembly.filter(b => b.type === 'heading');
     for (let hi = 0; hi < headings.length; hi++) {
-      const mdText = headings[hi].translatedMd ?? headings[hi].originalMd;
+      const mdText = headings[hi].translatedContent ?? headings[hi].content;
       const cleaned = cleanTitle(mdText);
       if (!cleaned) continue;
 
       // If this is just a number (chapter number) and there's a next heading,
       // combine: "1. The Myth of the Ant Queen"
       if (/^\d+$/.test(cleaned) && hi + 1 < headings.length) {
-        const nextMd = headings[hi + 1].translatedMd ?? headings[hi + 1].originalMd;
+        const nextMd = headings[hi + 1].translatedContent ?? headings[hi + 1].content;
         const nextCleaned = cleanTitle(nextMd);
         if (nextCleaned && !/^\d+$/.test(nextCleaned)) {
           chapterTitle = `${cleaned}. ${nextCleaned}`;
@@ -145,7 +145,7 @@ export function assembleEpub(
     if (!chapterTitle) {
       const textBlock = blocksForAssembly.find(b => b.type === 'paragraph');
       if (textBlock) {
-        const mdText = textBlock.translatedMd ?? textBlock.originalMd;
+        const mdText = textBlock.translatedContent ?? textBlock.content;
         chapterTitle = cleanTitle(mdText, 80);
       }
     }

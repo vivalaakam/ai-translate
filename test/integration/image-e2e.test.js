@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { EpubParser } from '../../src/parsers/epub-parser.js';
-import { extractAllBlocks, buildImageMap } from '../../src/parsers/block-extractor.js';
+import { extractAllBlocks } from '../../src/parsers/block-extractor.js';
 import { assembleEpub } from '../../src/parsers/epub-assembler.js';
 import { TranslateDb } from '../../src/db/database.js';
 import AdmZip from 'adm-zip';
@@ -13,16 +13,28 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = path.join(__dirname, '..', 'fixtures');
 const SAMPLE_WITH_IMAGE = path.join(FIXTURES_DIR, 'sample-with-image.epub');
 
+const TEST_DB_URL = process.env.DATABASE_URL;
+
 let tmpDir;
 let db;
 
-beforeAll(() => {
+beforeAll(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-translate-img-e2e-'));
-  db = new TranslateDb(path.join(tmpDir, 'test.db'));
+  db = new TranslateDb(TEST_DB_URL);
+  await db.migrate();
+
+  // Clean any leftover e2e test data
+  await db.raw.query(`DELETE FROM blocks WHERE book_id IN ('e2e-image-test-book','e2e-image-para-test')`);
+  await db.raw.query(`DELETE FROM files WHERE book_id IN ('e2e-image-test-book','e2e-image-para-test')`);
+  await db.raw.query(`DELETE FROM books WHERE id IN ('e2e-image-test-book','e2e-image-para-test')`);
 });
 
-afterAll(() => {
-  db.close();
+afterAll(async () => {
+  await db.raw.query(`DELETE FROM blocks WHERE book_id IN ('e2e-image-test-book','e2e-image-para-test')`);
+  await db.raw.query(`DELETE FROM files WHERE book_id IN ('e2e-image-test-book','e2e-image-para-test')`);
+  await db.raw.query(`DELETE FROM books WHERE id IN ('e2e-image-test-book','e2e-image-para-test')`);
+  await db.close();
+  await TranslateDb.closePool();
   fs.rmSync(tmpDir, { recursive: true });
 });
 
@@ -49,7 +61,7 @@ describe('E2E: EPUB import/export with image', () => {
     // Should have at least heading and paragraph blocks
     // Note: <img> inside <p class="imagefp"> is extracted as 'paragraph' type,
     // not 'image' — this is expected because the <p> is the block-level element
-    const types = blocks.map(b => b.type);
+    const types = blocks.map((b) => b.type);
     expect(types).toContain('heading');
     expect(types).toContain('paragraph');
 
@@ -58,7 +70,7 @@ describe('E2E: EPUB import/export with image', () => {
     expect(fileRecords[0].mimeType).toBe('image/png');
 
     // ── Step 3: Store in DB ───────────────────────────────────
-    db.insertBook({
+    await db.insertBook({
       id: bookId,
       title: parsed.metadata.title,
       author: parsed.metadata.author || 'Unknown',
@@ -69,41 +81,29 @@ describe('E2E: EPUB import/export with image', () => {
 
     // Insert file records
     for (const file of fileRecords) {
-      db.insertFile(file);
+      await db.insertFile(file);
     }
 
-    // Insert blocks (DB expects snake_case field names)
-    db.insertBlocks(
-      blocks.map(b => ({
-        id: b.id,
-        bookId: b.bookId,
-        index: b.index ?? b.blockIndex ?? 0,
-        docPath: b.docPath,
-        type: b.type,
-        originalMd: b.originalMd,
-        translatedMd: b.translatedMd,
-        fileId: b.fileId ?? null,
-        tagName: b.tagName,
-        attributes: b.attributes,
-      })),
-    );
+    // Insert blocks — blocks from extractAllBlocks already have the new shape
+    // (content, lang, model, sourceId). Just pass them through.
+    await db.insertBlocks(blocks);
 
     // Verify DB state
-    const storedBlocks = db.getBlocksByBook(bookId);
+    const storedBlocks = await db.getBlocksByBook(bookId);
     expect(storedBlocks.length).toBe(blocks.length);
 
-    const storedFiles = db.getFilesByBook(bookId);
+    const storedFiles = await db.getFilesByBook(bookId);
     expect(storedFiles.length).toBeGreaterThan(0);
 
     // ── Step 4: Assemble EPUB (original mode) ──────────────────
     const outputPath = path.join(tmpDir, 'exported_exported.epub');
-    assembleEpub(bookId, db, outputPath, { mode: 'original' });
+    await assembleEpub(bookId, db, outputPath, { mode: 'original' });
 
     expect(fs.existsSync(outputPath)).toBe(true);
 
     // ── Step 5: Verify assembled EPUB ─────────────────────────
     const zip = new AdmZip(outputPath);
-    const entries = zip.getEntries().map(e => e.entryName);
+    const entries = zip.getEntries().map((e) => e.entryName);
 
     // Basic EPUB structure
     expect(entries).toContain('mimetype');
@@ -113,7 +113,7 @@ describe('E2E: EPUB import/export with image', () => {
     expect(entries).toContain('OEBPS/styles.css');
 
     // Image file must be in the EPUB
-    const imageEntry = entries.find(e => e.includes('.png') && e.includes('images/'));
+    const imageEntry = entries.find((e) => e.includes('.png') && e.includes('images/'));
     expect(imageEntry).toBeDefined();
 
     // Image data must match original
@@ -141,7 +141,7 @@ describe('E2E: EPUB import/export with image', () => {
     expect(chapterContent).toContain('This paragraph has text after an image');
 
     // Cleanup
-    db.deleteBook(bookId);
+    await db.deleteBook(bookId);
   });
 
   it('should resolve image inside <p> paragraph block (not type=image)', async () => {
@@ -158,7 +158,7 @@ describe('E2E: EPUB import/export with image', () => {
       parsed.images,
     );
 
-    db.insertBook({
+    await db.insertBook({
       id: bookId,
       title: 'Image Para Test',
       author: 'Test',
@@ -168,26 +168,13 @@ describe('E2E: EPUB import/export with image', () => {
     });
 
     for (const file of fileRecords) {
-      db.insertFile(file);
+      await db.insertFile(file);
     }
 
-    db.insertBlocks(
-      blocks.map(b => ({
-        id: b.id,
-        bookId: b.bookId,
-        index: b.index ?? b.blockIndex ?? 0,
-        docPath: b.docPath,
-        type: b.type,
-        originalMd: b.originalMd,
-        translatedMd: b.translatedMd,
-        fileId: b.fileId ?? null,
-        tagName: b.tagName,
-        attributes: b.attributes,
-      })),
-    );
+    await db.insertBlocks(blocks);
 
     const outputPath = path.join(tmpDir, 'exported_para_image.epub');
-    assembleEpub(bookId, db, outputPath, { mode: 'original' });
+    await assembleEpub(bookId, db, outputPath, { mode: 'original' });
 
     const zip = new AdmZip(outputPath);
     const chapterContent = zip.readAsText('OEBPS/chapter_0.xhtml');
@@ -200,6 +187,6 @@ describe('E2E: EPUB import/export with image', () => {
     }
 
     // Cleanup
-    db.deleteBook(bookId);
+    await db.deleteBook(bookId);
   });
 });

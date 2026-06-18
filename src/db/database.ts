@@ -1,17 +1,32 @@
-import Database from 'better-sqlite3';
 import path from 'path';
-import fs from 'fs';
+import { Pool, types } from 'pg';
 import { v5 as uuidv5 } from 'uuid';
 import jsSha3 from 'js-sha3';
 const keccak256: (data: string | ArrayBuffer | Buffer) => string = (jsSha3 as any).keccak256;
+import { DATABASE_URL } from '../utils/constants.js';
 import type { Block, BookRecord, BlockType, FileRecord } from '../types.js';
 
 // UUID v5 namespaces for deterministic IDs
 const BOOK_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 const BLOCK_NAMESPACE = '6ba7b811-9dad-11d1-80b4-00c04fd430c8';
 const FILE_NAMESPACE = '6ba7b812-9dad-11d1-80b4-00c04fd430c8';
+const TRANSLATION_NAMESPACE = '6ba7b813-9dad-11d1-80b4-00c04fd430c8';
 
-const DEFAULT_DB_DIR = path.join(process.cwd(), '.data');
+// Make pg return BYTEA as Buffer (OID 17).
+// pg natively returns BYTEA as Buffer in binary mode; in text mode it returns
+// a "\\x<hex>" string. We normalize both to Buffer.
+types.setTypeParser(17, (val: string | Buffer) => {
+  if (Buffer.isBuffer(val)) return val;
+  if (typeof val !== 'string') return Buffer.from(val);
+  // pg text format: \x<hex>
+  if (val.startsWith('\\x')) {
+    return Buffer.from(val.slice(2), 'hex');
+  }
+  return Buffer.from(val, 'hex');
+});
+
+// Parse timestamp as ISO string (OID 1184)
+types.setTypeParser(1184, (val: string) => val);
 
 /**
  * Generate a deterministic book ID from file contents using keccak256 → UUID v5.
@@ -41,6 +56,13 @@ export function generateFileId(data: Buffer): string {
 }
 
 /**
+ * Generate a deterministic translation block ID from sourceBlockId + lang + model.
+ */
+export function generateTranslationId(sourceBlockId: string, lang: string, model: string): string {
+  return uuidv5(`${sourceBlockId}:${lang}:${model}`, TRANSLATION_NAMESPACE);
+}
+
+/**
  * Guess MIME type from file extension.
  */
 function guessMimeType(filePath: string): string {
@@ -60,27 +82,37 @@ function guessMimeType(filePath: string): string {
   return mimeMap[ext] || 'application/octet-stream';
 }
 
+let _pool: Pool | null = null;
+
+function getPool(connectionString?: string): Pool {
+  if (!_pool || _pool.ended) {
+    _pool = new Pool({
+      connectionString: connectionString || process.env.DATABASE_URL || DATABASE_URL,
+      max: 10,
+    });
+  }
+  return _pool;
+}
+
 /**
- * SQLite database manager for books, blocks, and files.
+ * PostgreSQL database manager for books, blocks, and files.
+ *
+ * The blocks table stores both originals and translations:
+ *   - Original: lang = source lang, model = NULL, source_id = NULL
+ *   - Translation: lang = target lang, model = model name, source_id = original block ID
  */
 export class TranslateDb {
-  private db: Database.Database;
+  private pool: Pool;
 
-  constructor(dbPath?: string) {
-    const dir = dbPath ? path.dirname(dbPath) : DEFAULT_DB_DIR;
-    fs.mkdirSync(dir, { recursive: true });
-    const resolvedPath = dbPath || path.join(DEFAULT_DB_DIR, 'translate.db');
-    this.db = new Database(resolvedPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
-    this.migrate();
+  constructor(connectionString?: string) {
+    this.pool = getPool(connectionString);
   }
 
   /**
-   * Run database migrations.
+   * Run database migrations (idempotent — safe to call on every startup).
    */
-  private migrate(): void {
-    this.db.exec(`
+  async migrate(): Promise<void> {
+    await this.pool.query(`
       CREATE TABLE IF NOT EXISTS books (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -92,8 +124,18 @@ export class TranslateDb {
         target_lang TEXT,
         source_lang TEXT,
         model TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        completed_at TEXT
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        completed_at TIMESTAMPTZ
+      );
+
+      CREATE TABLE IF NOT EXISTS files (
+        id TEXT PRIMARY KEY,
+        book_id TEXT NOT NULL,
+        original_path TEXT NOT NULL,
+        mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+        data BYTEA NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
       );
 
       CREATE TABLE IF NOT EXISTS blocks (
@@ -102,267 +144,375 @@ export class TranslateDb {
         block_index INTEGER NOT NULL,
         doc_path TEXT NOT NULL,
         type TEXT NOT NULL,
-        original_md TEXT NOT NULL DEFAULT '',
-        translated_md TEXT,
+        content TEXT NOT NULL DEFAULT '',
+        lang TEXT NOT NULL,
+        model TEXT,
+        source_id TEXT,
         file_id TEXT,
         tag_name TEXT NOT NULL DEFAULT 'p',
         attributes TEXT NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
         FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS files (
-        id TEXT PRIMARY KEY,
-        book_id TEXT NOT NULL,
-        original_path TEXT NOT NULL,
-        mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
-        data BLOB NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
       );
 
       CREATE INDEX IF NOT EXISTS idx_blocks_book_id ON blocks(book_id);
       CREATE INDEX IF NOT EXISTS idx_blocks_book_doc ON blocks(book_id, doc_path);
       CREATE INDEX IF NOT EXISTS idx_blocks_book_index ON blocks(book_id, block_index);
       CREATE INDEX IF NOT EXISTS idx_blocks_file_id ON blocks(file_id);
+      CREATE INDEX IF NOT EXISTS idx_blocks_source_id ON blocks(source_id);
+      CREATE INDEX IF NOT EXISTS idx_blocks_lang ON blocks(book_id, lang);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_blocks_translation_unique ON blocks(source_id, lang, model) WHERE source_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_files_book_id ON files(book_id);
       CREATE INDEX IF NOT EXISTS idx_files_original_path ON files(book_id, original_path);
     `);
-
-    // Migration: add file_id column if it doesn't exist (drop old image_base64)
-    const cols = this.db.prepare("PRAGMA table_info(blocks)").all() as { name: string }[];
-    const colNames = cols.map(c => c.name);
-    if (colNames.includes('image_base64') && !colNames.includes('file_id')) {
-      this.db.exec(`
-        ALTER TABLE blocks ADD COLUMN file_id TEXT REFERENCES files(id) ON DELETE SET NULL;
-      `);
-    }
   }
 
   // ─── Book CRUD ─────────────────────────────────────────────
 
-  insertBook(book: Partial<Omit<BookRecord, 'createdAt' | 'completedAt' | 'translatedBlocks'>> & { id: string; title: string; author: string; language: string; filename: string; totalBlocks: number; translatedBlocks?: number }): void {
-    this.db.prepare(`
+  async insertBook(book: Partial<Omit<BookRecord, 'createdAt' | 'completedAt' | 'translatedBlocks'>> & { id: string; title: string; author: string; language: string; filename: string; totalBlocks: number; translatedBlocks?: number }): Promise<void> {
+    await this.pool.query(`
       INSERT INTO books (id, title, author, language, filename, total_blocks, translated_blocks, target_lang, source_lang, model)
-      VALUES (@id, @title, @author, @language, @filename, @totalBlocks, @translatedBlocks, @targetLang, @sourceLang, @model)
-    `).run({
-      id: book.id,
-      title: book.title,
-      author: book.author,
-      language: book.language,
-      filename: book.filename,
-      totalBlocks: book.totalBlocks,
-      translatedBlocks: book.translatedBlocks ?? 0,
-      targetLang: book.targetLang ?? null,
-      sourceLang: book.sourceLang ?? null,
-      model: book.model ?? null,
-    });
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (id) DO NOTHING
+    `, [
+      book.id,
+      book.title,
+      book.author,
+      book.language,
+      book.filename,
+      book.totalBlocks,
+      book.translatedBlocks ?? 0,
+      book.targetLang ?? null,
+      book.sourceLang ?? null,
+      book.model ?? null,
+    ]);
   }
 
-  getBook(id: string): BookRecord | undefined {
-    const row = this.db.prepare('SELECT * FROM books WHERE id = ?').get(id) as Record<string, any> | undefined;
-    if (!row) return undefined;
-    return this.mapBookRow(row);
+  async getBook(id: string): Promise<BookRecord | undefined> {
+    const { rows } = await this.pool.query('SELECT * FROM books WHERE id = $1', [id]);
+    if (rows.length === 0) return undefined;
+    return this.mapBookRow(rows[0]);
   }
 
-  updateBookProgress(bookId: string, translatedBlocks: number): void {
-    this.db.prepare(`
-      UPDATE books SET translated_blocks = ? WHERE id = ?
-    `).run(translatedBlocks, bookId);
+  async updateBookProgress(bookId: string, translatedBlocks: number): Promise<void> {
+    await this.pool.query('UPDATE books SET translated_blocks = $1 WHERE id = $2', [translatedBlocks, bookId]);
   }
 
-  completeBook(bookId: string): void {
-    this.db.prepare(`
-      UPDATE books SET completed_at = datetime('now'), translated_blocks = total_blocks WHERE id = ?
-    `).run(bookId);
+  async completeBook(bookId: string): Promise<void> {
+    await this.pool.query(`
+      UPDATE books SET completed_at = now(), translated_blocks = total_blocks WHERE id = $1
+    `, [bookId]);
   }
 
-  setBookTranslationConfig(bookId: string, targetLang: string, sourceLang: string, model: string): void {
-    this.db.prepare(`
-      UPDATE books SET target_lang = ?, source_lang = ?, model = ? WHERE id = ?
-    `).run(targetLang, sourceLang, model, bookId);
+  async setBookTranslationConfig(bookId: string, targetLang: string, sourceLang: string, model: string): Promise<void> {
+    await this.pool.query(`
+      UPDATE books SET target_lang = $1, source_lang = $2, model = $3 WHERE id = $4
+    `, [targetLang, sourceLang, model, bookId]);
   }
 
-  listBooks(): BookRecord[] {
-    const rows = this.db.prepare('SELECT * FROM books ORDER BY created_at DESC').all() as Record<string, any>[];
-    return rows.map(this.mapBookRow);
+  async listBooks(): Promise<BookRecord[]> {
+    const { rows } = await this.pool.query('SELECT * FROM books ORDER BY created_at DESC');
+    return rows.map((r: Record<string, any>) => this.mapBookRow(r));
   }
 
-  deleteBook(bookId: string): void {
-    this.db.prepare('DELETE FROM blocks WHERE book_id = ?').run(bookId);
-    this.db.prepare('DELETE FROM files WHERE book_id = ?').run(bookId);
-    this.db.prepare('DELETE FROM books WHERE id = ?').run(bookId);
+  async deleteBook(bookId: string): Promise<void> {
+    await this.pool.query('DELETE FROM blocks WHERE book_id = $1', [bookId]);
+    await this.pool.query('DELETE FROM files WHERE book_id = $1', [bookId]);
+    await this.pool.query('DELETE FROM books WHERE id = $1', [bookId]);
   }
 
   // ─── Block CRUD ────────────────────────────────────────────
 
-  insertBlocks(blocks: Block[]): void {
-    const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO blocks (id, book_id, block_index, doc_path, type, original_md, translated_md, file_id, tag_name, attributes)
-      VALUES (@id, @bookId, @blockIndex, @docPath, @type, @originalMd, @translatedMd, @fileId, @tagName, @attributes)
-    `);
-
-    const insertMany = this.db.transaction((items: Block[]) => {
-      for (const b of items) {
-        stmt.run({
-          id: b.id,
-          bookId: b.bookId,
-          blockIndex: b.index,
-          docPath: b.docPath,
-          type: b.type,
-          originalMd: b.originalMd,
-          translatedMd: b.translatedMd,
-          fileId: b.fileId,
-          tagName: b.tagName,
-          attributes: b.attributes,
-        });
+  /**
+   * Insert original blocks (lang set on each block, model = NULL, sourceId = NULL).
+   * Uses ON CONFLICT (id) DO NOTHING for dedup.
+   */
+  async insertBlocks(blocks: Block[]): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const b of blocks) {
+        await client.query(`
+          INSERT INTO blocks (id, book_id, block_index, doc_path, type, content, lang, model, source_id, file_id, tag_name, attributes)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          ON CONFLICT (id) DO NOTHING
+        `, [
+          b.id, b.bookId, b.index, b.docPath, b.type,
+          b.content, b.lang, b.model ?? null, b.sourceId ?? null,
+          b.fileId, b.tagName, b.attributes,
+        ]);
       }
-    });
-
-    insertMany(blocks);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
-  getBlocksByBook(bookId: string): Block[] {
-    const rows = this.db.prepare(
-      'SELECT * FROM blocks WHERE book_id = ? ORDER BY block_index'
-    ).all(bookId) as Record<string, any>[];
-    return rows.map(this.mapBlockRow);
+  /**
+   * Get all original blocks for a book (where source_id IS NULL).
+   */
+  async getBlocksByBook(bookId: string): Promise<Block[]> {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM blocks WHERE book_id = $1 AND source_id IS NULL ORDER BY block_index',
+      [bookId]
+    );
+    return rows.map((r: Record<string, any>) => this.mapBlockRow(r));
   }
 
-  getBlocksByDoc(bookId: string, docPath: string): Block[] {
-    const rows = this.db.prepare(
-      'SELECT * FROM blocks WHERE book_id = ? AND doc_path = ? ORDER BY block_index'
-    ).all(bookId, docPath) as Record<string, any>[];
-    return rows.map(this.mapBlockRow);
+  /**
+   * Get original blocks for a specific document.
+   */
+  async getBlocksByDoc(bookId: string, docPath: string): Promise<Block[]> {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM blocks WHERE book_id = $1 AND doc_path = $2 AND source_id IS NULL ORDER BY block_index',
+      [bookId, docPath]
+    );
+    return rows.map((r: Record<string, any>) => this.mapBlockRow(r));
   }
 
-  getUntranslatedBlocks(bookId: string): Block[] {
-    const rows = this.db.prepare(
-      "SELECT * FROM blocks WHERE book_id = ? AND translated_md IS NULL AND type != 'image' ORDER BY block_index"
-    ).all(bookId) as Record<string, any>[];
-    return rows.map(this.mapBlockRow);
+  /**
+   * Get original blocks that have no translation in the given target language.
+   * If model is specified, only checks for translations by that exact model.
+   * Skips image blocks (they don't need translation).
+   */
+  async getUntranslatedBlocks(bookId: string, targetLang: string, model?: string): Promise<Block[]> {
+    if (model) {
+      const { rows } = await this.pool.query(`
+        SELECT b.* FROM blocks b
+        WHERE b.book_id = $1
+          AND b.source_id IS NULL
+          AND b.type != 'image'
+          AND NOT EXISTS (
+            SELECT 1 FROM blocks t WHERE t.source_id = b.id AND t.lang = $2 AND t.model = $3
+          )
+        ORDER BY b.block_index
+      `, [bookId, targetLang, model]);
+      return rows.map((r: Record<string, any>) => this.mapBlockRow(r));
+    }
+    const { rows } = await this.pool.query(`
+      SELECT b.* FROM blocks b
+      WHERE b.book_id = $1
+        AND b.source_id IS NULL
+        AND b.type != 'image'
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks t WHERE t.source_id = b.id AND t.lang = $2
+        )
+      ORDER BY b.block_index
+    `, [bookId, targetLang]);
+    return rows.map((r: Record<string, any>) => this.mapBlockRow(r));
   }
 
-  getTranslatedBlocks(bookId: string): Block[] {
-    const rows = this.db.prepare(
-      'SELECT * FROM blocks WHERE book_id = ? AND translated_md IS NOT NULL ORDER BY block_index'
-    ).all(bookId) as Record<string, any>[];
-    return rows.map(this.mapBlockRow);
+  /**
+   * Get all blocks with translations joined in for a specific language.
+   * Returns original blocks with a `translatedContent` field set from translation rows.
+   */
+  async getBlocksByBookWithTranslations(bookId: string, targetLang: string, model?: string): Promise<Block[]> {
+    const { rows } = await this.pool.query(`
+      SELECT b.*, t.content AS translated_content
+      FROM blocks b
+      LEFT JOIN LATERAL (
+        SELECT content
+        FROM blocks t
+        WHERE t.source_id = b.id AND t.lang = $2
+          ${model ? 'AND t.model = $3' : ''}
+        ORDER BY t.created_at DESC
+        LIMIT 1
+      ) t ON true
+      WHERE b.book_id = $1 AND b.source_id IS NULL
+      ORDER BY b.block_index
+    `, model ? [bookId, targetLang, model] : [bookId, targetLang]);
+
+    return rows.map((r: Record<string, any>) => ({
+      ...this.mapBlockRow(r),
+      translatedContent: r.translated_content ?? null,
+    }));
   }
 
-  updateBlockTranslation(blockId: string, translatedMd: string): void {
-    this.db.prepare(`
-      UPDATE blocks SET translated_md = ? WHERE id = ?
-    `).run(translatedMd, blockId);
+  /**
+   * Get blocks for a specific document with translations joined in.
+   */
+  async getBlocksByDocWithTranslations(bookId: string, docPath: string, targetLang: string, model?: string): Promise<Block[]> {
+    const params: any[] = [bookId, targetLang, docPath];
+    let modelFilter = '';
+    if (model) {
+      modelFilter = 'AND t.model = $4';
+      params.push(model);
+    }
+    const { rows } = await this.pool.query(`
+      SELECT b.*, t.content AS translated_content
+      FROM blocks b
+      LEFT JOIN LATERAL (
+        SELECT content
+        FROM blocks t
+        WHERE t.source_id = b.id AND t.lang = $2
+          ${modelFilter}
+        ORDER BY t.created_at DESC
+        LIMIT 1
+      ) t ON true
+      WHERE b.book_id = $1 AND b.source_id IS NULL AND b.doc_path = $3
+      ORDER BY b.block_index
+    `, params);
+
+    return rows.map((r: Record<string, any>) => ({
+      ...this.mapBlockRow(r),
+      translatedContent: r.translated_content ?? null,
+    }));
   }
 
-  countBlocks(bookId: string): { total: number; translated: number } {
-    const row = this.db.prepare(`
-      SELECT
-        COUNT(*) as total,
-        SUM(CASE WHEN translated_md IS NOT NULL THEN 1 ELSE 0 END) as translated
-      FROM blocks WHERE book_id = ?
-    `).get(bookId) as Record<string, number>;
-    return { total: row.total, translated: row.translated ?? 0 };
+  async countBlocks(bookId: string, targetLang?: string, model?: string): Promise<{ total: number; translated: number }> {
+    if (targetLang) {
+      const params: any[] = [bookId, targetLang];
+      let modelFilter = '';
+      if (model) {
+        modelFilter = 'AND model = $3';
+        params.push(model);
+      }
+      const { rows } = await this.pool.query(`
+        SELECT
+          COUNT(*) as total,
+          COALESCE(SUM(CASE WHEN t.source_id IS NOT NULL THEN 1 ELSE 0 END), 0) as translated
+        FROM blocks b
+        LEFT JOIN (
+          SELECT DISTINCT source_id FROM blocks WHERE lang = $2 AND source_id IS NOT NULL ${modelFilter}
+        ) t ON t.source_id = b.id
+        WHERE b.book_id = $1 AND b.source_id IS NULL
+      `, params);
+      return { total: parseInt(rows[0].total), translated: parseInt(rows[0].translated) };
+    }
+    const { rows } = await this.pool.query(`
+      SELECT COUNT(*) as total, 0 as translated FROM blocks WHERE book_id = $1 AND source_id IS NULL
+    `, [bookId]);
+    return { total: parseInt(rows[0].total), translated: 0 };
   }
 
-  getDocPaths(bookId: string): string[] {
-    const rows = this.db.prepare(
-      'SELECT doc_path, MIN(block_index) AS min_idx FROM blocks WHERE book_id = ? GROUP BY doc_path ORDER BY min_idx'
-    ).all(bookId) as Record<string, any>[];
-    return rows.map(r => r.doc_path);
+  async getDocPaths(bookId: string): Promise<string[]> {
+    const { rows } = await this.pool.query(
+      'SELECT doc_path, MIN(block_index) AS min_idx FROM blocks WHERE book_id = $1 AND source_id IS NULL GROUP BY doc_path ORDER BY min_idx',
+      [bookId]
+    );
+    return rows.map((r: Record<string, any>) => r.doc_path);
+  }
+
+  // ─── Translation CRUD (uses blocks table with source_id) ───
+
+  /**
+   * Insert or update a translation block.
+   * Creates a new block row with source_id pointing to the original block.
+   * Uses ON CONFLICT (id) DO UPDATE — id is deterministic from sourceBlockId+lang+model.
+   */
+  async upsertTranslation(sourceBlock: Block, translatedContent: string, lang: string, model: string): Promise<void> {
+    const id = generateTranslationId(sourceBlock.id, lang, model);
+    await this.pool.query(`
+      INSERT INTO blocks (id, book_id, block_index, doc_path, type, content, lang, model, source_id, file_id, tag_name, attributes)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, created_at = now()
+    `, [
+      id, sourceBlock.bookId, sourceBlock.index, sourceBlock.docPath, sourceBlock.type,
+      translatedContent, lang, model, sourceBlock.id,
+      sourceBlock.fileId, sourceBlock.tagName, sourceBlock.attributes,
+    ]);
+  }
+
+  /**
+   * Get the latest translation block for a source block in a specific language.
+   */
+  async getTranslation(sourceBlockId: string, lang: string, model?: string): Promise<Block | undefined> {
+    let query = 'SELECT * FROM blocks WHERE source_id = $1 AND lang = $2';
+    const params: any[] = [sourceBlockId, lang];
+    if (model) {
+      query += ' AND model = $3';
+      params.push(model);
+    }
+    query += ' ORDER BY created_at DESC LIMIT 1';
+    const { rows } = await this.pool.query(query, params);
+    if (rows.length === 0) return undefined;
+    return this.mapBlockRow(rows[0]);
+  }
+
+  /**
+   * Get all translation blocks for a source block.
+   */
+  async getTranslationsByBlock(sourceBlockId: string): Promise<Block[]> {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM blocks WHERE source_id = $1 ORDER BY created_at DESC',
+      [sourceBlockId]
+    );
+    return rows.map((r: Record<string, any>) => this.mapBlockRow(r));
   }
 
   // ─── File CRUD ─────────────────────────────────────────────
 
-  /**
-   * Insert a file record. If a file with the same id already exists, it is replaced.
-   * The id is derived from keccak256 of the binary data — deduplication by content.
-   */
-  insertFile(file: FileRecord): void {
-    this.db.prepare(`
-      INSERT OR REPLACE INTO files (id, book_id, original_path, mime_type, data, created_at)
-      VALUES (@id, @bookId, @originalPath, @mimeType, @data, @createdAt)
-    `).run({
-      id: file.id,
-      bookId: file.bookId,
-      originalPath: file.originalPath,
-      mimeType: file.mimeType,
-      data: file.data,
-      createdAt: file.createdAt,
-    });
+  async insertFile(file: FileRecord): Promise<void> {
+    await this.pool.query(`
+      INSERT INTO files (id, book_id, original_path, mime_type, data, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (id) DO NOTHING
+    `, [file.id, file.bookId, file.originalPath, file.mimeType, file.data, file.createdAt]);
   }
 
-  /**
-   * Insert multiple file records in a transaction.
-   */
-  insertFiles(files: FileRecord[]): void {
-    const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO files (id, book_id, original_path, mime_type, data, created_at)
-      VALUES (@id, @bookId, @originalPath, @mimeType, @data, @createdAt)
-    `);
-
-    const insertMany = this.db.transaction((items: FileRecord[]) => {
-      for (const f of items) {
-        stmt.run({
-          id: f.id,
-          bookId: f.bookId,
-          originalPath: f.originalPath,
-          mimeType: f.mimeType,
-          data: f.data,
-          createdAt: f.createdAt,
-        });
+  async insertFiles(files: FileRecord[]): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const f of files) {
+        await client.query(`
+          INSERT INTO files (id, book_id, original_path, mime_type, data, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (id) DO NOTHING
+        `, [f.id, f.bookId, f.originalPath, f.mimeType, f.data, f.createdAt]);
       }
-    });
-
-    insertMany(files);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
-  /**
-   * Get a file record by ID (without binary data for metadata queries).
-   */
-  getFile(id: string): FileRecord | undefined {
-    const row = this.db.prepare('SELECT * FROM files WHERE id = ?').get(id) as Record<string, any> | undefined;
-    if (!row) return undefined;
-    return this.mapFileRow(row);
+  async getFile(id: string): Promise<FileRecord | undefined> {
+    const { rows } = await this.pool.query('SELECT * FROM files WHERE id = $1', [id]);
+    if (rows.length === 0) return undefined;
+    return this.mapFileRow(rows[0]);
   }
 
-  /**
-   * Get a file record by book ID and original path.
-   */
-  getFileByPath(bookId: string, originalPath: string): FileRecord | undefined {
-    const row = this.db.prepare(
-      'SELECT * FROM files WHERE book_id = ? AND original_path = ?'
-    ).get(bookId, originalPath) as Record<string, any> | undefined;
-    if (!row) return undefined;
-    return this.mapFileRow(row);
+  async getFileByPath(bookId: string, originalPath: string): Promise<FileRecord | undefined> {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM files WHERE book_id = $1 AND original_path = $2',
+      [bookId, originalPath]
+    );
+    if (rows.length === 0) return undefined;
+    return this.mapFileRow(rows[0]);
   }
 
-  /**
-   * Get all files for a book.
-   */
-  getFilesByBook(bookId: string): FileRecord[] {
-    const rows = this.db.prepare(
-      'SELECT * FROM files WHERE book_id = ?'
-    ).all(bookId) as Record<string, any>[];
-    return rows.map(this.mapFileRow);
+  async getFilesByBook(bookId: string): Promise<FileRecord[]> {
+    const { rows } = await this.pool.query('SELECT * FROM files WHERE book_id = $1', [bookId]);
+    return rows.map((r: Record<string, any>) => this.mapFileRow(r));
   }
 
-  /**
-   * Delete all files for a book.
-   */
-  deleteFilesByBook(bookId: string): void {
-    this.db.prepare('DELETE FROM files WHERE book_id = ?').run(bookId);
+  async deleteFilesByBook(bookId: string): Promise<void> {
+    await this.pool.query('DELETE FROM files WHERE book_id = $1', [bookId]);
   }
 
   // ─── General ───────────────────────────────────────────────
 
-  close(): void {
-    this.db.close();
+  async close(): Promise<void> {
+    // Don't close the pool — it's shared. Just release any client references.
   }
 
-  get raw(): Database.Database {
-    return this.db;
+  static async closePool(): Promise<void> {
+    if (_pool && !_pool.ended) {
+      await _pool.end();
+      _pool = null;
+    }
+  }
+
+  get raw(): Pool {
+    return this.pool;
   }
 
   // ─── Private helpers ──────────────────────────────────────
@@ -391,8 +541,10 @@ export class TranslateDb {
       index: row.block_index,
       docPath: row.doc_path,
       type: row.type as BlockType,
-      originalMd: row.original_md,
-      translatedMd: row.translated_md,
+      content: row.content,
+      lang: row.lang,
+      model: row.model,
+      sourceId: row.source_id,
       fileId: row.file_id,
       tagName: row.tag_name,
       attributes: row.attributes,
@@ -405,7 +557,7 @@ export class TranslateDb {
       bookId: row.book_id,
       originalPath: row.original_path,
       mimeType: row.mime_type,
-      data: row.data, // Buffer from BLOB
+      data: row.data,
       createdAt: row.created_at,
     };
   }

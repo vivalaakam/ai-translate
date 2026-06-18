@@ -9,6 +9,7 @@ import { JobQueue } from './job-queue.js';
 import { JsonRpcRouter, RPC_ERRORS } from './jsonrpc.js';
 import type { JsonRpcRequest, JsonRpcResponse } from './jsonrpc.js';
 import { registerMethods } from './rpc-methods.js';
+import { TranslateDb } from '../db/database.js';
 import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER, UPLOAD_ONLY } from '../utils/constants.js';
 import type { TranslationJob } from '../types.js';
 
@@ -166,10 +167,9 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
    * Used by book detail pages and assembled EPUBs to resolve file:ID references.
    */
   app.get('/files/:id', async (req, res): Promise<void> => {
-    const { TranslateDb } = await import('../db/database.js');
     const db = new TranslateDb(dbPath);
     try {
-      const file = db.getFile(req.params.id);
+      const file = await db.getFile(req.params.id);
       if (!file) {
         res.status(404).json({ error: 'File not found' });
         return;
@@ -181,7 +181,7 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
@@ -267,9 +267,20 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
 
 /**
  * Start the web server.
+ * Migrates the database before accepting connections to avoid race conditions.
  */
-export function startServer(port: number = DEFAULT_PORT, options?: { ollamaUrl?: string; defaultModel?: string; apiKey?: string; provider?: string }): http.Server {
+export async function startServer(port: number = DEFAULT_PORT, options?: { ollamaUrl?: string; defaultModel?: string; apiKey?: string; provider?: string; dbPath?: string }): Promise<http.Server> {
   const { server, jobQueue } = createApp(options);
+
+  // Run DB migration before listening to avoid race conditions
+  const db = new TranslateDb(options?.dbPath);
+  try {
+    await db.migrate();
+    await db.close();
+  } catch (err: any) {
+    console.error('DB migration failed:', err);
+    process.exit(1);
+  }
 
   server.listen(port, () => {
     console.log(`🌐 ai-translate web server running at http://localhost:${port}`);

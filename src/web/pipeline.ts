@@ -13,7 +13,7 @@ import { parseProvider, ensureModelLoaded, unloadIfWeLoaded } from '../translato
 import type { TranslationJob, BookRecord } from '../types.js';
 
 /**
- * Upload a book: parse + extract blocks → store in SQLite.
+ * Upload a book: parse + extract blocks → store in PostgreSQL.
  * No translation — just indexing the book for later translation.
  *
  * Returns the book record from DB.
@@ -26,6 +26,9 @@ export async function runUpload(
   const db = new TranslateDb(options?.dbPath);
 
   try {
+    // Ensure DB schema exists
+    await db.migrate();
+
     // ── Parse ────────────────────────────────────────────────
     jobQueue.updateStatus(job.id, 'parsing', 'Parsing file...', 5);
 
@@ -34,7 +37,7 @@ export async function runUpload(
     const bookId = generateBookId(fileBuffer);
 
     // Check if book already exists in DB
-    const existingBook = db.getBook(bookId);
+    const existingBook = await db.getBook(bookId);
     if (existingBook) {
       jobQueue.updateStatus(job.id, 'completed', `Book already in DB: "${existingBook.title}"`, 100);
       jobQueue.setMetadata(job.id, {
@@ -63,7 +66,7 @@ export async function runUpload(
     const { blocks, files } = extractAllBlocks(parsed.contentDocs, bookId, parsed.images);
 
     // Store book record
-    db.insertBook({
+    await db.insertBook({
       id: bookId,
       title: parsed.metadata.title,
       author: parsed.metadata.author,
@@ -74,23 +77,24 @@ export async function runUpload(
 
     // Store image files
     if (files.length > 0) {
-      db.insertFiles(files);
+      await db.insertFiles(files);
     }
 
     // Store blocks
-    db.insertBlocks(blocks);
+    await db.insertBlocks(blocks);
 
     // Store metadata on job
     jobQueue.setMetadata(job.id, parsed.metadata);
     jobQueue.updateStatus(job.id, 'completed', `Parsed: "${parsed.metadata.title}" — ${blocks.length} blocks, ${files.length} images`, 100);
 
-    return db.getBook(bookId)!;
+    const book = await db.getBook(bookId);
+    return book!;
   } catch (err: any) {
     jobQueue.setError(job.id, err.message || 'Unknown error');
     jobQueue.updateStatus(job.id, 'failed', `Failed: ${err.message}`, 0);
     throw err;
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
@@ -98,7 +102,7 @@ export async function runUpload(
  * Run the full block-based translation pipeline for a job.
  *
  * 1. Parse the book file
- * 2. Extract blocks → store in SQLite
+ * 2. Extract blocks → store in PostgreSQL
  * 3. Translate each untranslated block individually
  * 4. Assemble translated blocks back into EPUB
  *
@@ -120,6 +124,9 @@ export async function runTranslation(
   let modelLoadedByUs = false;
 
   try {
+    // Ensure DB schema exists
+    await db.migrate();
+
     // ── Step 0: Load model (LM Studio) ──────────────────────
     if (provider === 'lmstudio') {
       jobQueue.updateStatus(job.id, 'parsing', `Loading model "${job.model}" in LM Studio...`, 2);
@@ -138,7 +145,7 @@ export async function runTranslation(
     const bookId = generateBookId(fileBuffer);
 
     // Check if book already exists in DB (resume support)
-    const existingBook = db.getBook(bookId);
+    const existingBook = await db.getBook(bookId);
     if (existingBook && existingBook.completedAt) {
       jobQueue.updateStatus(job.id, 'completed', `Book already translated: "${existingBook.title}"`, 100);
       return;
@@ -162,7 +169,7 @@ export async function runTranslation(
 
     // Store book record
     if (!existingBook) {
-      db.insertBook({
+      await db.insertBook({
         id: bookId,
         title: parsed.metadata.title,
         author: parsed.metadata.author,
@@ -174,16 +181,16 @@ export async function runTranslation(
         model: job.model,
       });
     } else {
-      db.setBookTranslationConfig(bookId, job.targetLang, job.sourceLang, job.model);
+      await db.setBookTranslationConfig(bookId, job.targetLang, job.sourceLang, job.model);
     }
 
     // Store image files
     if (files.length > 0) {
-      db.insertFiles(files);
+      await db.insertFiles(files);
     }
 
     // Store blocks
-    db.insertBlocks(blocks);
+    await db.insertBlocks(blocks);
 
     // Store metadata on job
     jobQueue.setMetadata(job.id, parsed.metadata);
@@ -196,52 +203,52 @@ export async function runTranslation(
     const sourceLang = job.sourceLang === 'auto' ? parsed.metadata.language : job.sourceLang;
 
     // Get only untranslated blocks (skip images, already translated)
-    const untranslated = db.getUntranslatedBlocks(bookId);
+    const untranslated = await db.getUntranslatedBlocks(bookId, job.targetLang, job.model);
     const totalToTranslate = untranslated.length;
     let translatedCount = 0;
 
     // Get existing count for progress
-    const counts = db.countBlocks(bookId);
+    const counts = await db.countBlocks(bookId, job.targetLang, job.model);
     const alreadyTranslated = counts.translated;
 
     for (let i = 0; i < untranslated.length; i++) {
       const block = untranslated[i];
 
       try {
-        const translatedMd = await client.translate(block.originalMd, {
+        const translatedMd = await client.translate(block.content, {
           sourceLang,
           targetLang: job.targetLang,
           maxRetries: 3,
         });
 
-        db.updateBlockTranslation(block.id, translatedMd);
+        await db.upsertTranslation(block, translatedMd, job.targetLang, job.model);
         translatedCount++;
 
         // Update progress: 12% (start) → 90% (translation done)
         const overallProgress = 12 + Math.round((translatedCount / totalToTranslate) * 78);
-        const chapterMsg = `Block ${i + 1}/${totalToTranslate}: ${block.originalMd.slice(0, 40)}...`;
+        const chapterMsg = `Block ${i + 1}/${totalToTranslate}: ${block.content.slice(0, 40)}...`;
         jobQueue.updateStatus(job.id, 'translating', chapterMsg, overallProgress);
 
         // Update book progress
-        db.updateBookProgress(bookId, alreadyTranslated + translatedCount);
+        await db.updateBookProgress(bookId, alreadyTranslated + translatedCount);
       } catch (err: any) {
         // Log but continue — one block failure shouldn't stop the whole book
         console.error(`Failed to translate block ${block.id}: ${err.message}`);
         // Store empty translation to mark as attempted
-        db.updateBlockTranslation(block.id, block.originalMd); // Fallback to original
+        await db.upsertTranslation(block, block.content, job.targetLang, job.model); // Fallback to original
         translatedCount++;
       }
     }
 
     // Mark book as complete
-    db.completeBook(bookId);
+    await db.completeBook(bookId);
 
     // ── Step 4: Assemble ────────────────────────────────────────
     jobQueue.updateStatus(job.id, 'assembling', 'Assembling translated EPUB...', 92);
 
     const baseName = path.basename(job.originalFilename, path.extname(job.originalFilename));
     const outputPath = path.join(outputDir, `${job.id}_${baseName}_${job.targetLang}.epub`);
-    assembleEpub(bookId, db, outputPath, { mode: 'translated', lang: job.targetLang });
+    await assembleEpub(bookId, db, outputPath, { mode: 'translated', lang: job.targetLang });
 
     jobQueue.setOutputPath(job.id, outputPath);
     jobQueue.updateStatus(job.id, 'completed', 'Translation complete!', 100);
@@ -250,7 +257,7 @@ export async function runTranslation(
     jobQueue.setError(job.id, err.message || 'Unknown error');
     jobQueue.updateStatus(job.id, 'failed', `Failed: ${err.message}`, 0);
   } finally {
-    db.close();
+    await db.close();
     // Unload model if we loaded it (LM Studio)
     if (modelLoadedByUs) {
       try {
@@ -269,18 +276,19 @@ export async function runTranslation(
  * @param bookId - Book ID in the database
  * @param options - Export mode ('original' or 'translated') and language
  * @param outputDir - Directory for the output EPUB file
- * @param dbPath - Path to the SQLite database
+ * @param dbPath - Path to the database
  * @returns Output file path
  */
-export function runExport(
+export async function runExport(
   bookId: string,
   options: { mode: 'original' | 'translated'; lang?: string },
   outputDir: string,
   dbPath?: string,
-): string {
+): Promise<string> {
   const db = new TranslateDb(dbPath);
   try {
-    const book = db.getBook(bookId);
+    await db.migrate();
+    const book = await db.getBook(bookId);
     if (!book) throw new Error(`Book not found: ${bookId}`);
 
     const suffix = options.mode === 'translated' ? `_${book.targetLang || 'translated'}` : '_exported';
@@ -292,10 +300,10 @@ export function runExport(
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
-    assembleEpub(bookId, db, outputPath, options);
+    await assembleEpub(bookId, db, outputPath, options);
 
     return outputPath;
   } finally {
-    db.close();
+    await db.close();
   }
 }
