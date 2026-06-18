@@ -211,10 +211,12 @@ export type BlockType = 'heading' | 'paragraph' | 'image' | 'list_item' | 'quote
 
 /**
  * A single block extracted from a book, stored as one row in the blocks table.
- * Only stores the original text — translations live in the translations table.
+ * The blocks table holds both originals and translations — distinguished by lang/model.
+ * Original rows: lang = source language, model = NULL, sourceId = NULL.
+ * Translation rows: lang = target language, model = model name, sourceId = original block ID.
  */
 export interface Block {
-  /** UUID v5 derived from original text (deterministic ID for dedup) */
+  /** UUID v5 derived from source text (deterministic ID for dedup) */
   id: string;
   /** Foreign key to books.id */
   bookId: string;
@@ -224,39 +226,35 @@ export interface Block {
   docPath: string;
   /** Semantic block type */
   type: BlockType;
-  /** Original text content in Markdown */
-  originalMd: string;
+  /** Text content in Markdown (original or translated, depending on lang) */
+  content: string;
   /**
-   * Translated text content in Markdown.
-   * Not stored in the blocks table — populated from the translations table via JOIN.
-   * Null when no translation exists for the requested language.
+   * Translated content — populated via JOIN from translation blocks.
+   * Not stored on the row itself; set by getBlocksByBookWithTranslations.
    */
-  translatedMd?: string | null;
+  translatedContent?: string | null;
+  /**
+   * Language code of this block's content (e.g. "en", "ru").
+   * For original blocks — the source language; for translations — the target language.
+   */
+  lang: string;
+  /**
+   * Model used to produce this block's content.
+   * NULL for original blocks (human-authored text).
+   * Set to the model name for translated blocks (e.g. "hy-mt2-7b", "gpt-4o").
+   */
+  model: string | null;
+  /**
+   * ID of the source block this block was translated from.
+   * NULL for original blocks, set to the original block's ID for translations.
+   */
+  sourceId: string | null;
   /** Foreign key to files.id (only set for type="image", null otherwise) */
   fileId: string | null;
   /** Original HTML tag name (e.g. "p", "h1", "img") for reassembly */
   tagName: string;
   /** Additional HTML attributes to preserve during reassembly (JSON string) */
   attributes: string;
-}
-
-/**
- * A translation of a block into a specific language.
- * Stored in the translations table — one row per (block, language, model) combination.
- */
-export interface TranslationRecord {
-  /** UUID v5 derived from blockId + lang + model */
-  id: string;
-  /** Foreign key to blocks.id */
-  blockId: string;
-  /** Translated text content in Markdown */
-  translatedMd: string;
-  /** Target language code (e.g. "en", "ru") */
-  lang: string;
-  /** Model used for translation (e.g. "hy-mt2-7b", "gpt-4o") */
-  model: string;
-  /** Timestamp when translation was created */
-  createdAt: string;
 }
 
 /**

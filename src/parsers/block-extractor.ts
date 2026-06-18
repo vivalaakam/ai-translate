@@ -124,8 +124,10 @@ function extractBlock(node: any, bookId: string, docPath: string, index: number,
       index,
       docPath,
       type: 'page_break',
-      originalMd: '---',
-      translatedMd: null,
+      content: '---',
+      lang: '',
+      model: null,
+      sourceId: null,
       fileId: null,
       tagName,
       attributes,
@@ -146,8 +148,8 @@ function extractBlock(node: any, bookId: string, docPath: string, index: number,
 
     // Use file:ID reference in markdown so we can resolve it later
     const mdSrc = fileId ? `file:${fileId}` : src;
-    const originalMd = alt ? `![${alt}](${mdSrc})` : `![](${mdSrc})`;
-    const blockId = generateBlockId(bookId, originalMd);
+    const content = alt ? `![${alt}](${mdSrc})` : `![](${mdSrc})`;
+    const blockId = generateBlockId(bookId, content);
 
     return {
       id: blockId,
@@ -155,8 +157,10 @@ function extractBlock(node: any, bookId: string, docPath: string, index: number,
       index,
       docPath,
       type: 'image',
-      originalMd,
-      translatedMd: null,
+      content,
+      lang: '',
+      model: null,
+      sourceId: null,
       fileId,
       tagName,
       attributes,
@@ -201,11 +205,11 @@ function extractBlock(node: any, bookId: string, docPath: string, index: number,
 
   // Standard block element — convert to Markdown
   const html = node.outerHTML || node.textContent || '';
-  const originalMd = turndown.turndown(html).trim();
+  const content = turndown.turndown(html).trim();
 
-  if (!originalMd) return null;
+  if (!content) return null;
 
-  const blockId = generateBlockId(bookId, originalMd);
+  const blockId = generateBlockId(bookId, content);
 
   return {
     id: blockId,
@@ -213,8 +217,10 @@ function extractBlock(node: any, bookId: string, docPath: string, index: number,
     index,
     docPath,
     type,
-    originalMd,
-    translatedMd: null,
+    content,
+    lang: '',
+    model: null,
+    sourceId: null,
     fileId: null,
     tagName,
     attributes,
@@ -300,7 +306,7 @@ export function extractAllBlocks(contentDocs: ContentDoc[], bookId: string, imag
     for (const block of docBlocks) {
       block.index = globalIndex++;
       // Re-generate ID with global index context for uniqueness
-      block.id = generateBlockId(bookId, `${block.docPath}:${globalIndex}:${block.originalMd}`);
+      block.id = generateBlockId(bookId, `${block.docPath}:${globalIndex}:${block.content}`);
       allBlocks.push(block);
     }
   }

@@ -80,9 +80,10 @@ describe('Inline formatting: Turndown extraction', () => {
 describe('Inline formatting: MarkdownIt assembly', () => {
   function makeBlock(md) {
     return {
-      id: 'test', bookId: 'b', docPath: 'x', blockIndex: 0,
-      type: 'paragraph', tagName: 'p', originalMd: md,
-      translatedMd: null, attributes: '{}', imageBase64: null,
+      id: 'test', bookId: 'b', docPath: 'x', index: 0,
+      type: 'paragraph', lang: 'en', model: null, sourceId: null, fileId: null,
+      tagName: 'p', content: md,
+      translatedContent: null, attributes: '{}',
     };
   }
 
@@ -114,9 +115,10 @@ describe('Inline formatting: MarkdownIt assembly', () => {
 describe('Inline formatting: round-trip', () => {
   function makeBlock(md) {
     return {
-      id: 'test', bookId: 'b', docPath: 'x', blockIndex: 0,
-      type: 'paragraph', tagName: 'p', originalMd: md,
-      translatedMd: null, attributes: '{}', imageBase64: null,
+      id: 'test', bookId: 'b', docPath: 'x', index: 0,
+      type: 'paragraph', lang: 'en', model: null, sourceId: null, fileId: null,
+      tagName: 'p', content: md,
+      translatedContent: null, attributes: '{}',
     };
   }
 

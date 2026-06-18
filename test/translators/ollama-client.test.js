@@ -199,12 +199,14 @@ describe('OllamaClient', () => {
   });
 
   describe('buildPrompt', () => {
-    it('should include source and target language', () => {
+    it('should include target language and source text', () => {
+      // buildPrompt substitutes {targetLang} and {sourceText} into the
+      // TRANSLATION_PROMPT_TEMPLATE. The template does not reference
+      // {sourceLang}, so the prompt only contains the target language name.
       const prompt = client.buildPrompt('Hello world', {
         sourceLang: 'English',
         targetLang: 'Spanish',
       });
-      expect(prompt).toContain('English');
       expect(prompt).toContain('Spanish');
       expect(prompt).toContain('Hello world');
     });

@@ -215,18 +215,18 @@ export async function runTranslation(
       const block = untranslated[i];
 
       try {
-        const translatedMd = await client.translate(block.originalMd, {
+        const translatedMd = await client.translate(block.content, {
           sourceLang,
           targetLang: job.targetLang,
           maxRetries: 3,
         });
 
-        await db.upsertTranslation(block.id, translatedMd, job.targetLang, job.model);
+        await db.upsertTranslation(block, translatedMd, job.targetLang, job.model);
         translatedCount++;
 
         // Update progress: 12% (start) → 90% (translation done)
         const overallProgress = 12 + Math.round((translatedCount / totalToTranslate) * 78);
-        const chapterMsg = `Block ${i + 1}/${totalToTranslate}: ${block.originalMd.slice(0, 40)}...`;
+        const chapterMsg = `Block ${i + 1}/${totalToTranslate}: ${block.content.slice(0, 40)}...`;
         jobQueue.updateStatus(job.id, 'translating', chapterMsg, overallProgress);
 
         // Update book progress
@@ -235,7 +235,7 @@ export async function runTranslation(
         // Log but continue — one block failure shouldn't stop the whole book
         console.error(`Failed to translate block ${block.id}: ${err.message}`);
         // Store empty translation to mark as attempted
-        await db.upsertTranslation(block.id, block.originalMd, job.targetLang, job.model); // Fallback to original
+        await db.upsertTranslation(block, block.content, job.targetLang, job.model); // Fallback to original
         translatedCount++;
       }
     }

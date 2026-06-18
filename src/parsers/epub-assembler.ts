@@ -26,7 +26,7 @@ import type { BookRecord, Block, FileRecord } from '../types.js';
 import { assembleDocHtml } from './block-assembler.js';
 
 export interface AssembleOptions {
-  /** 'original' uses originalMd, 'translated' uses translatedMd (fallback: originalMd) */
+  /** 'original' uses content, 'translated' uses translatedContent (fallback: content) */
   mode: 'original' | 'translated';
   /** Language code for the output EPUB (default: source language) */
   lang?: string;
@@ -74,10 +74,10 @@ export async function assembleEpub(
     }
   }
 
-  // If mode is 'original', strip translations so assembler uses originalMd
+  // If mode is 'original', strip translations so assembler uses content
   if (options.mode === 'original') {
     for (const block of allBlocks) {
-      block.translatedMd = null;
+      block.translatedContent = null;
     }
   }
 
@@ -116,20 +116,20 @@ export async function assembleEpub(
     // Use translated text if mode is 'translated' and translation exists
     const blocksForAssembly = options.mode === 'translated'
       ? docBlocks
-      : docBlocks.map(b => ({ ...b, translatedMd: null })); // force original
+      : docBlocks.map(b => ({ ...b, translatedContent: null })); // force original
 
     // Find a title from heading blocks, skipping trivial ones
     let chapterTitle = '';
     const headings = blocksForAssembly.filter(b => b.type === 'heading');
     for (let hi = 0; hi < headings.length; hi++) {
-      const mdText = headings[hi].translatedMd ?? headings[hi].originalMd;
+      const mdText = headings[hi].translatedContent ?? headings[hi].content;
       const cleaned = cleanTitle(mdText);
       if (!cleaned) continue;
 
       // If this is just a number (chapter number) and there's a next heading,
       // combine: "1. The Myth of the Ant Queen"
       if (/^\d+$/.test(cleaned) && hi + 1 < headings.length) {
-        const nextMd = headings[hi + 1].translatedMd ?? headings[hi + 1].originalMd;
+        const nextMd = headings[hi + 1].translatedContent ?? headings[hi + 1].content;
         const nextCleaned = cleanTitle(nextMd);
         if (nextCleaned && !/^\d+$/.test(nextCleaned)) {
           chapterTitle = `${cleaned}. ${nextCleaned}`;
@@ -145,7 +145,7 @@ export async function assembleEpub(
     if (!chapterTitle) {
       const textBlock = blocksForAssembly.find(b => b.type === 'paragraph');
       if (textBlock) {
-        const mdText = textBlock.translatedMd ?? textBlock.originalMd;
+        const mdText = textBlock.translatedContent ?? textBlock.content;
         chapterTitle = cleanTitle(mdText, 80);
       }
     }

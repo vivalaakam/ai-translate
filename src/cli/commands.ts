@@ -199,23 +199,23 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
       let done = 0;
 
       for (const block of untranslated) {
-        const blockSpinner = ora(`Block ${done + 1}/${totalToTranslate}: ${block.originalMd.slice(0, 50)}...`).start();
+        const blockSpinner = ora(`Block ${done + 1}/${totalToTranslate}: ${block.content.slice(0, 50)}...`).start();
 
         try {
-          const translatedMd = await client.translate(block.originalMd, {
+          const translatedMd = await client.translate(block.content, {
             sourceLang: resolvedSourceLang,
             targetLang,
             maxRetries: 3,
           });
 
-          await db.upsertTranslation(block.id, translatedMd, targetLang, model);
+          await db.upsertTranslation(block, translatedMd, targetLang, model);
           done++;
 
           const progress = Math.round((done / totalToTranslate) * 100);
           blockSpinner.succeed(`[${progress}%] Block ${done}/${totalToTranslate} ✓`);
         } catch (err: any) {
           // Fallback to original on error
-          await db.upsertTranslation(block.id, block.originalMd, targetLang, model);
+          await db.upsertTranslation(block, block.content, targetLang, model);
           done++;
           blockSpinner.warn(`Block ${done}/${totalToTranslate} — fallback to original: ${err.message}`);
         }
