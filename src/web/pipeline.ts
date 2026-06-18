@@ -22,6 +22,34 @@ import { parse as parseHtml } from 'node-html-parser';
 const _loadedOcrModels = new Set<string>();
 
 /**
+ * Check if there are any pending or processing ocr_page tasks in the DB.
+ */
+async function hasPendingOcrTasks(db: TranslateDb): Promise<boolean> {
+  const { rows } = await db.raw.query(
+    `SELECT COUNT(*) as cnt FROM tasks WHERE type = 'ocr_page' AND status IN ('pending', 'processing')`
+  );
+  return parseInt(rows[0].cnt) > 0;
+}
+
+/**
+ * Unload OCR models if no more pending/processing ocr_page tasks remain.
+ */
+async function maybeUnloadOcrModels(db: TranslateDb): Promise<void> {
+  const hasMore = await hasPendingOcrTasks(db);
+  if (!hasMore) {
+    for (const model of _loadedOcrModels) {
+      try {
+        unloadModel(model);
+        console.log(`[ocr] Model "${model}" unloaded from LM Studio — no more ocr_page tasks`);
+      } catch {
+        // Best-effort
+      }
+    }
+    _loadedOcrModels.clear();
+  }
+}
+
+/**
  * Parse a file into ParsedEpub based on its extension.
  * Handles EPUB, FB2, and PDF (via OCR).
  */
@@ -392,6 +420,9 @@ export async function processOcrTask(
     if (counts.completed + counts.failed >= counts.total && counts.processing === 0) {
       await finalizeDocParsing(task.docId, inputPath);
     }
+
+    // ── Unload OCR model if no more ocr_page tasks pending ──
+    await maybeUnloadOcrModels(db);
   } catch (err: any) {
     await db.failTask(task.id, err.message || 'Unknown error');
     // Check if all tasks are done even after failure
@@ -399,6 +430,8 @@ export async function processOcrTask(
     if (counts.completed + counts.failed >= counts.total && counts.processing === 0) {
       await finalizeDocParsing(task.docId, inputPath);
     }
+    // ── Unload OCR model if no more ocr_page tasks pending ──
+    await maybeUnloadOcrModels(db);
   } finally {
     await db.close();
   }
@@ -451,25 +484,6 @@ export async function finalizeDocParsing(docId: string, inputPath: string): Prom
     await db.updateTotalBlocks(docId, blocks.length);
 
     console.log(`[finalizeDocParsing] Doc ${docId}: ${blocks.length} blocks from ${completedTasks.length} pages`);
-
-    // ── Unload OCR model if we loaded it and no more docs need it ──
-    // Check if there are other docs still parsing
-    const { rows } = await db.raw.query(`
-      SELECT COUNT(*) as cnt FROM docs WHERE status = 'parsing'
-    `);
-    const stillParsing = parseInt(rows[0].cnt);
-    if (stillParsing === 0) {
-      // No more docs parsing — safe to unload OCR models
-      for (const model of _loadedOcrModels) {
-        try {
-          unloadModel(model);
-          console.log(`[ocr] Model "${model}" unloaded from LM Studio`);
-        } catch {
-          // Best-effort
-        }
-      }
-      _loadedOcrModels.clear();
-    }
   } catch (err: any) {
     console.error(`[finalizeDocParsing] Failed for doc ${docId}:`, err.message);
     await db.updateDocStatus(docId, 'failed');
