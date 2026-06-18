@@ -211,6 +211,7 @@ export type BlockType = 'heading' | 'paragraph' | 'image' | 'list_item' | 'quote
 
 /**
  * A single block extracted from a book, stored as one row in the blocks table.
+ * Only stores the original text — translations live in the translations table.
  */
 export interface Block {
   /** UUID v5 derived from original text (deterministic ID for dedup) */
@@ -225,14 +226,37 @@ export interface Block {
   type: BlockType;
   /** Original text content in Markdown */
   originalMd: string;
-  /** Translated text content in Markdown (null until translated) */
-  translatedMd: string | null;
+  /**
+   * Translated text content in Markdown.
+   * Not stored in the blocks table — populated from the translations table via JOIN.
+   * Null when no translation exists for the requested language.
+   */
+  translatedMd?: string | null;
   /** Foreign key to files.id (only set for type="image", null otherwise) */
   fileId: string | null;
   /** Original HTML tag name (e.g. "p", "h1", "img") for reassembly */
   tagName: string;
   /** Additional HTML attributes to preserve during reassembly (JSON string) */
   attributes: string;
+}
+
+/**
+ * A translation of a block into a specific language.
+ * Stored in the translations table — one row per (block, language, model) combination.
+ */
+export interface TranslationRecord {
+  /** UUID v5 derived from blockId + lang + model */
+  id: string;
+  /** Foreign key to blocks.id */
+  blockId: string;
+  /** Translated text content in Markdown */
+  translatedMd: string;
+  /** Target language code (e.g. "en", "ru") */
+  lang: string;
+  /** Model used for translation (e.g. "hy-mt2-7b", "gpt-4o") */
+  model: string;
+  /** Timestamp when translation was created */
+  createdAt: string;
 }
 
 /**

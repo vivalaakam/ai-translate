@@ -12,6 +12,7 @@ import { OllamaClient } from '../translators/ollama-client.js';
 import { TranslateDb, generateBookId } from '../db/database.js';
 import { extractAllBlocks } from '../parsers/block-extractor.js';
 import { assembleDocHtml } from '../parsers/block-assembler.js';
+import { assembleEpub } from '../parsers/epub-assembler.js';
 import { SUPPORTED_INPUT_FORMATS, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_CHUNK_SIZE, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER } from '../utils/constants.js';
 import { formatProgress, formatStats } from './progress.js';
 import { startServer } from '../web/server.js';
@@ -39,7 +40,7 @@ function generateOutputPath(inputPath: string, targetLang: string): string {
 }
 
 /**
- * Main translate command handler — block-by-block via SQLite.
+ * Main translate command handler — block-by-block via PostgreSQL.
  */
 async function translateCommand(inputFile: string, options: Record<string, any>): Promise<void> {
   const spinner = ora();
@@ -142,14 +143,17 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
     const bookId = generateBookId(fileBuffer);
     const db = new TranslateDb();
 
+    // Ensure DB schema exists
+    await db.migrate();
+
     // Extract blocks and store in DB
     spinner.start('Extracting blocks...');
     const { blocks, files } = extractAllBlocks(parsed.contentDocs, bookId, parsed.images);
 
     // Insert or update book record
-    const existingBook = db.getBook(bookId);
+    const existingBook = await db.getBook(bookId);
     if (!existingBook) {
-      db.insertBook({
+      await db.insertBook({
         id: bookId,
         title: parsed.metadata.title,
         author: parsed.metadata.author,
@@ -161,15 +165,15 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
         model,
       });
     } else {
-      db.setBookTranslationConfig(bookId, targetLang, sourceLang, model);
+      await db.setBookTranslationConfig(bookId, targetLang, sourceLang, model);
     }
 
     // Store image files
     if (files.length > 0) {
-      db.insertFiles(files);
+      await db.insertFiles(files);
     }
 
-    db.insertBlocks(blocks);
+    await db.insertBlocks(blocks);
     spinner.succeed(`Extracted ${blocks.length} blocks, ${files.length} images`);
 
     // Skip image blocks for translation count
@@ -179,12 +183,12 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
     if (dryRun) {
       console.log(chalk.yellow('\n--dry-run mode: no translation performed.'));
       console.log(chalk.white(`  Would translate ${translatableBlocks.length} blocks in ${parsed.contentDocs.length} documents.`));
-      db.close();
+      await db.close();
       return;
     }
 
     // Check if translation already completed
-    const untranslated = db.getUntranslatedBlocks(bookId);
+    const untranslated = await db.getUntranslatedBlocks(bookId, targetLang);
     if (untranslated.length === 0) {
       console.log(chalk.green('\n✅ Book is already fully translated!'));
     } else {
@@ -204,44 +208,36 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
             maxRetries: 3,
           });
 
-          db.updateBlockTranslation(block.id, translatedMd);
+          await db.upsertTranslation(block.id, translatedMd, targetLang, model);
           done++;
 
           const progress = Math.round((done / totalToTranslate) * 100);
           blockSpinner.succeed(`[${progress}%] Block ${done}/${totalToTranslate} ✓`);
         } catch (err: any) {
           // Fallback to original on error
-          db.updateBlockTranslation(block.id, block.originalMd);
+          await db.upsertTranslation(block.id, block.originalMd, targetLang, model);
           done++;
           blockSpinner.warn(`Block ${done}/${totalToTranslate} — fallback to original: ${err.message}`);
         }
       }
 
-      db.updateBookProgress(bookId, db.countBlocks(bookId).translated);
+      const counts = await db.countBlocks(bookId, targetLang);
+      await db.updateBookProgress(bookId, counts.translated);
     }
 
     // Assemble translated EPUB
     spinner.start('Assembling translated EPUB...');
-    const writer = new EpubWriter(parsed);
-    const docPaths = db.getDocPaths(bookId);
-
-    for (const docPath of docPaths) {
-      const docBlocks = db.getBlocksByDoc(bookId, docPath);
-      const html = assembleDocHtml(docBlocks);
-      writer.updateContentDoc(docPath, html);
-    }
-
-    await writer.write(outputPath);
-    db.completeBook(bookId);
-    db.close();
+    await assembleEpub(bookId, db, outputPath, { mode: 'translated', lang: targetLang });
+    await db.completeBook(bookId);
 
     spinner.succeed(chalk.green(`Written to: ${outputPath}`));
 
-    const counts = db.countBlocks(bookId);
+    const counts = await db.countBlocks(bookId, targetLang);
     console.log(chalk.cyan(`\n✅ Translation complete!`));
     console.log(chalk.white(`  Blocks: ${counts.translated}/${counts.total} translated`));
     console.log(chalk.white(`  Output: ${outputPath}`));
 
+    await db.close();
   } catch (error) {
     if (spinner.isSpinning) {
       spinner.fail('Error');

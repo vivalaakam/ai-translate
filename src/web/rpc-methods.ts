@@ -19,7 +19,7 @@ import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDE
 // ─── Schemas ───────────────────────────────────────────────────────
 
 const SCHEMAS: RpcMethodSchema[] = [
-  // ── System ──────────────────────────────────────
+  // ── System ──────────────────────────────────────────────────────
   {
     method: 'system.health',
     description: 'Health check — returns server uptime and status',
@@ -54,7 +54,7 @@ const SCHEMAS: RpcMethodSchema[] = [
     }},
   },
 
-  // ── Models ──────────────────────────────────────
+  // ── Models ──────────────────────────────────────────────────────
   {
     method: 'model.list',
     description: 'List available LLM models from the OpenAI-compatible API',
@@ -64,7 +64,7 @@ const SCHEMAS: RpcMethodSchema[] = [
     }},
   },
 
-  // ── Upload ───────────────────────────────────────
+  // ── Upload ─────────────────────────────────────────────────────
   {
     method: 'book.upload',
     description: 'Upload a book file (EPUB/FB2) and parse it into blocks. No translation — just indexing.',
@@ -106,7 +106,7 @@ const SCHEMAS: RpcMethodSchema[] = [
     }},
   },
 
-  // ── Books CRUD ──────────────────────────────────
+  // ── Books CRUD ──────────────────────────────────────────────────
   {
     method: 'book.list',
     description: 'List all books in the database',
@@ -159,7 +159,7 @@ const SCHEMAS: RpcMethodSchema[] = [
     }},
   },
 
-  // ── Files ────────────────────────────────────────
+  // ── Files ───────────────────────────────────────────────────────
   {
     method: 'file.get',
     description: 'Get metadata for a stored image file (binary data served via GET /files/:id)',
@@ -176,7 +176,7 @@ const SCHEMAS: RpcMethodSchema[] = [
     }},
   },
 
-  // ── Jobs ─────────────────────────────────────────
+  // ── Jobs ────────────────────────────────────────────────────────
   {
     method: 'job.list',
     description: 'List all translation jobs (most recent first)',
@@ -221,8 +221,7 @@ export function registerMethods(router: JsonRpcRouter, deps: {
 }): void {
   const { jobQueue, ollamaUrl, defaultModel, apiKey, provider, dbPath } = deps;
 
-  // ── System ──────────────────────────────────────
-  // ── System ──────────────────────────────────────
+  // ── System ──────────────────────────────────────────────────
   router.register('system.health', (_params, _ctx) => {
     return { status: 'ok', uptime: process.uptime() };
   });
@@ -257,7 +256,7 @@ export function registerMethods(router: JsonRpcRouter, deps: {
     return { errors: allErrors };
   });
 
-  // ── Models ──────────────────────────────────────
+  // ── Models ──────────────────────────────────────────────────
 
   router.register('model.list', async (_params, _ctx) => {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -272,7 +271,7 @@ export function registerMethods(router: JsonRpcRouter, deps: {
     return { models: data.data.map((m) => m.id).sort() };
   });
 
-  // ── Upload ───────────────────────────────────────
+  // ── Upload ─────────────────────────────────────────────────
 
   router.register('book.upload', (params, ctx) => {
     if (!ctx.file) {
@@ -325,10 +324,10 @@ export function registerMethods(router: JsonRpcRouter, deps: {
     return { jobId: job.id, status: job.status };
   });
 
-  router.register('book.startTranslation', (params, _ctx) => {
+  router.register('book.startTranslation', async (params, _ctx) => {
     const db = new TranslateDb(dbPath);
     try {
-      const book = db.getBook(params.bookId);
+      const book = await db.getBook(params.bookId);
       if (!book) {
         throw new RpcError(APP_ERRORS.BOOK_NOT_FOUND.code, APP_ERRORS.BOOK_NOT_FOUND.message);
       }
@@ -357,40 +356,49 @@ export function registerMethods(router: JsonRpcRouter, deps: {
 
       return { jobId: job.id, status: job.status };
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
-  // ── Books CRUD ──────────────────────────────────
+  // ── Books CRUD ─────────────────────────────────────────────
 
-  router.register('book.list', (_params, _ctx) => {
+  router.register('book.list', async (_params, _ctx) => {
     const db = new TranslateDb(dbPath);
     try {
-      return { books: db.listBooks() };
+      return { books: await db.listBooks() };
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
-  router.register('book.get', (params, _ctx) => {
+  router.register('book.get', async (params, _ctx) => {
     const db = new TranslateDb(dbPath);
     try {
-      const book = db.getBook(params.bookId);
+      const book = await db.getBook(params.bookId);
       if (!book) {
         throw new RpcError(APP_ERRORS.BOOK_NOT_FOUND.code, APP_ERRORS.BOOK_NOT_FOUND.message);
       }
-      const counts = db.countBlocks(book.id);
-      const docPaths = db.getDocPaths(book.id);
-      const chapters = docPaths.map(dp => {
-        const blocks = db.getBlocksByDoc(book.id, dp);
-        return {
+      const targetLang = book.targetLang || undefined;
+      const counts = await db.countBlocks(book.id, targetLang);
+      const docPaths = await db.getDocPaths(book.id);
+      const chapters = [];
+      for (const dp of docPaths) {
+        const blocks = await db.getBlocksByDoc(book.id, dp);
+        let translatedBlocks = 0;
+        if (targetLang) {
+          for (const b of blocks) {
+            const t = await db.getTranslation(b.id, targetLang, book.model ?? undefined);
+            if (t) translatedBlocks++;
+          }
+        }
+        chapters.push({
           docPath: dp,
           totalBlocks: blocks.length,
-          translatedBlocks: blocks.filter(b => b.translatedMd !== null).length,
-        };
-      });
+          translatedBlocks,
+        });
+      }
       // Include image file metadata (without binary data)
-      const files = db.getFilesByBook(book.id);
+      const files = await db.getFilesByBook(book.id);
       const images = files.map(f => ({
         id: f.id,
         originalPath: f.originalPath,
@@ -401,21 +409,21 @@ export function registerMethods(router: JsonRpcRouter, deps: {
       }));
       return { ...book, blockCounts: counts, chapters, images };
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
-  router.register('book.delete', (params, _ctx) => {
+  router.register('book.delete', async (params, _ctx) => {
     const db = new TranslateDb(dbPath);
     try {
-      const book = db.getBook(params.bookId);
+      const book = await db.getBook(params.bookId);
       if (!book) {
         throw new RpcError(APP_ERRORS.BOOK_NOT_FOUND.code, APP_ERRORS.BOOK_NOT_FOUND.message);
       }
-      db.deleteBook(params.bookId);
+      await db.deleteBook(params.bookId);
       return { deleted: true };
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
@@ -439,12 +447,12 @@ export function registerMethods(router: JsonRpcRouter, deps: {
     return { downloadUrl: `/api/download/${params.jobId}` };
   });
 
-  router.register('book.export', (params, _ctx) => {
+  router.register('book.export', async (params, _ctx) => {
     const mode = params.mode === 'original' ? 'original' : 'translated';
     const outputDir = JobQueue.getOutputDir();
 
     try {
-      const outputPath = runExport(params.bookId, { mode }, outputDir, dbPath);
+      const outputPath = await runExport(params.bookId, { mode }, outputDir, dbPath);
       const fileName = path.basename(outputPath);
 
       return {
@@ -460,12 +468,12 @@ export function registerMethods(router: JsonRpcRouter, deps: {
     }
   });
 
-  // ── Files ────────────────────────────────────────
+  // ── Files ──────────────────────────────────────────────────
 
-  router.register('file.get', (params, _ctx) => {
+  router.register('file.get', async (params, _ctx) => {
     const db = new TranslateDb(dbPath);
     try {
-      const file = db.getFile(params.fileId);
+      const file = await db.getFile(params.fileId);
       if (!file) {
         throw new RpcError(APP_ERRORS.BOOK_NOT_FOUND.code, `File not found: ${params.fileId}`);
       }
@@ -478,11 +486,11 @@ export function registerMethods(router: JsonRpcRouter, deps: {
         url: `/files/${file.id}`,
       };
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
-  // ── Jobs ─────────────────────────────────────────
+  // ── Jobs ───────────────────────────────────────────────────
 
   router.register('job.list', (_params, _ctx) => {
     return { jobs: jobQueue.list().map(serializeJob) };
@@ -504,7 +512,7 @@ export function registerMethods(router: JsonRpcRouter, deps: {
     return { deleted: true };
   });
 
-  // ── Register schemas ─────────────────────────────
+  // ── Register schemas ───────────────────────────────────────
   for (const schema of SCHEMAS) {
     // Schemas are set directly on the router's public map
     router.schemas.set(schema.method, schema);

@@ -1,6 +1,7 @@
 // Shared constants for ai-translate
 // Values can be overridden via environment variables or .env file
 
+export const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://local_user:local_user_dev@localhost:5432/ai_translate';
 export const OLLAMA_DEFAULT_URL = process.env.OPENAI_BASE_URL || process.env.OLLAMA_URL || 'http://localhost:11434';
 export const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'llama3.1';
 export const DEFAULT_API_KEY = process.env.OPENAI_API_KEY || '';

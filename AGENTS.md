@@ -7,7 +7,7 @@ Blocks are extracted per-paragraph, stored in SQLite, translated one-by-one, the
 ## Tech Stack
 - **Runtime:** Node.js 22+ (ES modules)
 - **Language:** TypeScript (strict)
-- **DB:** SQLite via better-sqlite3 (WAL mode, `.data/translate.db`)
+- **DB:** PostgreSQL (via pg, database `ai_translate`)
 - **Web:** Express 5 + WebSocket (ws)
 - **Translation:** OpenAI-compatible /v1/chat/completions API (Ollama, LM Studio, OpenAI, etc.)
 - **Testing:** Vitest
@@ -23,7 +23,7 @@ Output EPUB ← Block Assembler ← Translated blocks ← OllamaClient (block-by
 ```
 
 ### Key Modules
-- `src/db/database.ts` — TranslateDb: SQLite books + blocks tables, UUID v5 IDs
+- `src/db/database.ts` — TranslateDb: PostgreSQL books, blocks, translations, files tables, UUID v5 IDs
 - `src/parsers/block-extractor.ts` — HTML → Markdown blocks (via Turndown)
 - `src/parsers/block-assembler.ts` — Markdown blocks → HTML (via markdown-it)
 - `src/translators/ollama-client.ts` — OpenAI-compatible /v1/chat/completions streaming
@@ -33,7 +33,9 @@ Output EPUB ← Block Assembler ← Translated blocks ← OllamaClient (block-by
 
 ### Database Schema
 - **books** — id (UUID v5 from keccak256), title, author, language, total_blocks, translated_blocks, target_lang, source_lang, model, timestamps
-- **blocks** — id (UUID v5 from bookId+text), book_id FK, block_index, doc_path, type, original_md, translated_md, image_base64, tag_name, attributes
+- **blocks** — id (UUID v5 from bookId+text), book_id FK, block_index, doc_path, type, original_md, file_id FK, tag_name, attributes
+- **translations** — id (UUID v5 from blockId+lang+model), block_id FK, translated_md, lang, model, created_at (unique per block+lang+model)
+- **files** — id (UUID v5 from keccak256), book_id FK, original_path, mime_type, data (BYTEA), created_at
 
 ### Block Types
 `heading`, `paragraph`, `image`, `list_item`, `quote`, `code`, `table_row`, `other`
@@ -41,6 +43,8 @@ Output EPUB ← Block Assembler ← Translated blocks ← OllamaClient (block-by
 ### ID Generation
 - Book ID: `UUIDv5(keccak256(fileBytes), DNS_NS)`
 - Block ID: `UUIDv5("bookId:docPath:index:originalMd", URL_NS)`
+- Translation ID: `UUIDv5("blockId:lang:model", TRANSLATION_NS)`
+- File ID: `UUIDv5(keccak256(data), FILE_NS)`
 
 ## Key Commands
 - `npm test` — run all tests (103)
@@ -50,7 +54,7 @@ Output EPUB ← Block Assembler ← Translated blocks ← OllamaClient (block-by
 - `npm run typecheck` — tsc --noEmit
 
 ## Environment Variables
-See `.env.example` — OPENAI_BASE_URL, OLLAMA_MODEL, OPENAI_API_KEY, CHUNK_SIZE, PORT
+See `.env.example` — DATABASE_URL, OPENAI_BASE_URL, OLLAMA_MODEL, OPENAI_API_KEY, LLM_PROVIDER, CHUNK_SIZE, PORT
 
 ## File Structure
 ```

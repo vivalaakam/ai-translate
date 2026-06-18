@@ -2,7 +2,7 @@
  * EPUB Assembler — builds a valid EPUB file from database blocks + files.
  *
  * Unlike EpubWriter (which patches an existing ZIP), this creates an EPUB
- * from scratch using only the data stored in SQLite. This allows exporting
+ * from scratch using only the data stored in PostgreSQL. This allows exporting
  * both original and translated versions without needing the original file.
  *
  * Output structure:
@@ -40,19 +40,22 @@ export interface AssembleOptions {
  * @param outputPath - Where to write the .epub file
  * @param options - Assembly mode and language
  */
-export function assembleEpub(
+export async function assembleEpub(
   bookId: string,
   db: TranslateDb,
   outputPath: string,
   options: AssembleOptions = { mode: 'translated' },
-): void {
-  const book = db.getBook(bookId);
+): Promise<void> {
+  const book = await db.getBook(bookId);
   if (!book) throw new Error(`Book not found: ${bookId}`);
 
   // Gather data from DB
-  const allBlocks = db.getBlocksByBook(bookId);
-  const docPaths = db.getDocPaths(bookId);
-  const files = db.getFilesByBook(bookId);
+  const targetLang = options.mode === 'translated' ? (options.lang || book.targetLang || 'en') : undefined;
+  const allBlocks = targetLang
+    ? await db.getBlocksByBookWithTranslations(bookId, targetLang, book.model ?? undefined)
+    : await db.getBlocksByBook(bookId);
+  const docPaths = await db.getDocPaths(bookId);
+  const files = await db.getFilesByBook(bookId);
 
   // Build a path mapping: original image path → file ID
   // Keys include the original_path and variations (basename, relative paths)
@@ -71,13 +74,10 @@ export function assembleEpub(
     }
   }
 
-  // If mode is 'translated', swap originalMd ↔ translatedMd so assembler uses translated
-  if (options.mode === 'translated') {
+  // If mode is 'original', strip translations so assembler uses originalMd
+  if (options.mode === 'original') {
     for (const block of allBlocks) {
-      if (block.translatedMd !== null) {
-        // blockToHtml already prefers translatedMd over originalMd
-        // No swap needed — assembler picks translatedMd ?? originalMd
-      }
+      block.translatedMd = null;
     }
   }
 
