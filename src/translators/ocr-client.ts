@@ -112,30 +112,41 @@ export class OcrClient {
     console.log(`[ocr-client] extractPage: page=${pageNumber}, image=${imageBuffer.length} bytes, base64=${base64.length} chars, request body ~${bodySizeMB}MB`);
     console.log(`[ocr-client] POST ${this.baseUrl}/v1/chat/completions (model=${this.model})`);
 
-    const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...this._authHeaders(),
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [
-          { role: 'system', content: OCR_SYSTEM_PROMPT },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: `Extract all text from this page (page ${pageNumber}). Output only the Markdown text.` },
-              { type: 'image_url', image_url: { url: dataUrl } },
-            ],
-          },
-        ],
-        temperature: 0.1,
-        max_tokens: 4096,
-        stream: false,
-      }),
-      signal: AbortSignal.timeout(OCR_REQUEST_TIMEOUT_MS),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this._authHeaders(),
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            { role: 'system', content: OCR_SYSTEM_PROMPT },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: `Extract all text from this page (page ${pageNumber}). Output only the Markdown text.` },
+                { type: 'image_url', image_url: { url: dataUrl } },
+              ],
+            },
+          ],
+          temperature: 0.1,
+          max_tokens: 4096,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(OCR_REQUEST_TIMEOUT_MS),
+      });
+    } catch (fetchErr: any) {
+      // fetch failed — log the underlying cause (ECONNREFUSED, ECONNRESET, timeout, etc.)
+      const cause = fetchErr.cause;
+      const causeMsg = cause ? (cause.message || cause.code || String(cause)) : 'no cause';
+      const causeCode = cause?.code || 'unknown';
+      console.error(`[ocr-client] fetch FAILED for page ${pageNumber}: ${fetchErr.message} | cause: ${causeMsg} (code=${causeCode})`);
+      if (cause?.stack) console.error(`[ocr-client] cause stack: ${cause.stack.slice(0, 300)}`);
+      throw new Error(`OCR fetch failed (page ${pageNumber}): ${causeMsg} [${causeCode}] — is the API server running at ${this.baseUrl}?`);
+    }
 
     console.log(`[ocr-client] Response: status=${response.status} ${response.statusText}`);
 
