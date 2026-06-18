@@ -11,7 +11,7 @@ import type { JsonRpcRequest, JsonRpcResponse } from './jsonrpc.js';
 import { registerMethods } from './rpc-methods.js';
 import { TranslateDb } from '../db/database.js';
 import { processOcrTask } from './pipeline.js';
-import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER, UPLOAD_ONLY } from '../utils/constants.js';
+import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_OCR_MODEL, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER, UPLOAD_ONLY } from '../utils/constants.js';
 import type { TranslationJob } from '../types.js';
 
 // Storage config
@@ -45,10 +45,12 @@ interface WSClient {
 const wsClients: Set<WSClient> = new Set();
 
 // Config for the task worker (set in createApp, used in startServer)
-let _workerConfig: { ollamaUrl: string; apiKey: string; dbPath?: string } = {
+let _workerConfig: { ollamaUrl: string; apiKey: string; dbPath?: string; ocrModel: string; provider: string } = {
   ollamaUrl: OLLAMA_DEFAULT_URL,
   apiKey: DEFAULT_API_KEY,
   dbPath: undefined,
+  ocrModel: '',
+  provider: '',
 };
 
 /**
@@ -69,7 +71,7 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
   const dbPath = options?.dbPath;
 
   // Store config for task worker
-  _workerConfig = { ollamaUrl, apiKey, dbPath };
+  _workerConfig = { ollamaUrl, apiKey, dbPath, ocrModel: DEFAULT_OCR_MODEL, provider };
 
   // Job queue with WebSocket broadcast
   const jobQueue = new JobQueue((job) => {
@@ -343,7 +345,7 @@ export async function startServer(port: number = DEFAULT_PORT, options?: { ollam
         }
 
         // Process task asynchronously (don't block the worker loop)
-        processOcrTask(task, inputPath, _workerConfig.ollamaUrl, _workerConfig.apiKey).catch(err => {
+        processOcrTask(task, inputPath, _workerConfig.ollamaUrl, _workerConfig.apiKey, _workerConfig.ocrModel, _workerConfig.provider).catch(err => {
           console.error(`[worker] Task ${task.id} failed:`, err.message);
         });
       } finally {

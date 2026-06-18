@@ -13,10 +13,13 @@ import { OcrClient } from '../translators/ocr-client.js';
 import { extractAllBlocks } from '../parsers/block-extractor.js';
 import { JobQueue as JQStatic } from '../web/job-queue.js';
 import { JobQueue } from '../web/job-queue.js';
-import { parseProvider, ensureModelLoaded, unloadIfWeLoaded } from '../translators/model-manager.js';
-import { OLLAMA_DEFAULT_URL, DEFAULT_OCR_MODEL, DEFAULT_API_KEY } from '../utils/constants.js';
+import { parseProvider, ensureModelLoaded, unloadIfWeLoaded, unloadModel } from '../translators/model-manager.js';
+import { OLLAMA_DEFAULT_URL, DEFAULT_OCR_MODEL, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER } from '../utils/constants.js';
 import type { TranslationJob, BookRecord, ParsedEpub, TaskRecord } from '../types.js';
 import { parse as parseHtml } from 'node-html-parser';
+
+// Track which OCR models were loaded by us (per model name)
+const _loadedOcrModels = new Set<string>();
 
 /**
  * Parse a file into ParsedEpub based on its extension.
@@ -341,27 +344,41 @@ export async function runTranslation(
 }
 
 /**
- * Process a single OCR task: render PDF page → OCR → save content.
+ * Process a single OCR task: ensure model loaded → render PDF page → OCR → save content.
  * Called by the task worker loop in server.ts.
  *
  * @param task - The task record from the DB
  * @param inputPath - Path to the uploaded PDF file
  * @param ollamaUrl - API base URL for the OCR model
  * @param apiKey - API key for authentication
+ * @param ocrModel - OCR model name (e.g. 'deepseek-ocr')
+ * @param provider - LLM provider ('lmstudio', 'ollama', 'remote')
  */
 export async function processOcrTask(
   task: TaskRecord,
   inputPath: string,
   ollamaUrl: string,
   apiKey: string,
+  ocrModel: string,
+  provider: string,
 ): Promise<void> {
   const db = new TranslateDb();
+  const parsedProvider = parseProvider(provider);
+  let modelLoadedByUs = false;
+
   try {
+    // ── Ensure OCR model is loaded (LM Studio) ────────────────
+    if (parsedProvider === 'lmstudio' && !_loadedOcrModels.has(ocrModel)) {
+      modelLoadedByUs = ensureModelLoaded(ocrModel, parsedProvider);
+      _loadedOcrModels.add(ocrModel);
+      console.log(`[ocr] Model "${ocrModel}" ${modelLoadedByUs ? 'loaded into LM Studio' : 'already loaded'}`);
+    }
+
     // Render the PDF page to PNG
     const imgBuffer = renderPdfPage(inputPath, task.pageNum!);
 
     // OCR the page
-    const ocrClient = new OcrClient({ baseUrl: ollamaUrl, apiKey });
+    const ocrClient = new OcrClient({ baseUrl: ollamaUrl, model: ocrModel, apiKey });
     const markdown = await ocrClient.extractPage(imgBuffer, 'image/png', task.pageNum!);
 
     // Save content to task
@@ -434,6 +451,25 @@ export async function finalizeDocParsing(docId: string, inputPath: string): Prom
     await db.updateTotalBlocks(docId, blocks.length);
 
     console.log(`[finalizeDocParsing] Doc ${docId}: ${blocks.length} blocks from ${completedTasks.length} pages`);
+
+    // ── Unload OCR model if we loaded it and no more docs need it ──
+    // Check if there are other docs still parsing
+    const { rows } = await db.raw.query(`
+      SELECT COUNT(*) as cnt FROM docs WHERE status = 'parsing'
+    `);
+    const stillParsing = parseInt(rows[0].cnt);
+    if (stillParsing === 0) {
+      // No more docs parsing — safe to unload OCR models
+      for (const model of _loadedOcrModels) {
+        try {
+          unloadModel(model);
+          console.log(`[ocr] Model "${model}" unloaded from LM Studio`);
+        } catch {
+          // Best-effort
+        }
+      }
+      _loadedOcrModels.clear();
+    }
   } catch (err: any) {
     console.error(`[finalizeDocParsing] Failed for doc ${docId}:`, err.message);
     await db.updateDocStatus(docId, 'failed');
