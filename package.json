@@ -14,7 +14,9 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "web": "tsx src/index.ts web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "web:build": "cd src/web/frontend && npx vite build",
+    "web:dev": "cd src/web/frontend && npx vite"
   },
   "keywords": [
     "epub",
