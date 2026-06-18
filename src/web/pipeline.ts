@@ -203,12 +203,12 @@ export async function runTranslation(
     const sourceLang = job.sourceLang === 'auto' ? parsed.metadata.language : job.sourceLang;
 
     // Get only untranslated blocks (skip images, already translated)
-    const untranslated = await db.getUntranslatedBlocks(bookId, job.targetLang);
+    const untranslated = await db.getUntranslatedBlocks(bookId, job.targetLang, job.model);
     const totalToTranslate = untranslated.length;
     let translatedCount = 0;
 
     // Get existing count for progress
-    const counts = await db.countBlocks(bookId, job.targetLang);
+    const counts = await db.countBlocks(bookId, job.targetLang, job.model);
     const alreadyTranslated = counts.translated;
 
     for (let i = 0; i < untranslated.length; i++) {

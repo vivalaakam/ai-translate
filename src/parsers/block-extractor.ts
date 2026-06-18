@@ -304,9 +304,10 @@ export function extractAllBlocks(contentDocs: ContentDoc[], bookId: string, imag
     const docBlocks = extractBlocksFromDoc(doc, bookId, imageMap);
     // Re-index globally across all docs
     for (const block of docBlocks) {
-      block.index = globalIndex++;
+      block.index = globalIndex;
       // Re-generate ID with global index context for uniqueness
       block.id = generateBlockId(bookId, `${block.docPath}:${globalIndex}:${block.content}`);
+      globalIndex++;
       allBlocks.push(block);
     }
   }

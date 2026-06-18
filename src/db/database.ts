@@ -3,6 +3,7 @@ import { Pool, types } from 'pg';
 import { v5 as uuidv5 } from 'uuid';
 import jsSha3 from 'js-sha3';
 const keccak256: (data: string | ArrayBuffer | Buffer) => string = (jsSha3 as any).keccak256;
+import { DATABASE_URL } from '../utils/constants.js';
 import type { Block, BookRecord, BlockType, FileRecord } from '../types.js';
 
 // UUID v5 namespaces for deterministic IDs
@@ -86,7 +87,7 @@ let _pool: Pool | null = null;
 function getPool(connectionString?: string): Pool {
   if (!_pool || _pool.ended) {
     _pool = new Pool({
-      connectionString: connectionString || process.env.DATABASE_URL,
+      connectionString: connectionString || process.env.DATABASE_URL || DATABASE_URL,
       max: 10,
     });
   }
@@ -275,9 +276,23 @@ export class TranslateDb {
 
   /**
    * Get original blocks that have no translation in the given target language.
+   * If model is specified, only checks for translations by that exact model.
    * Skips image blocks (they don't need translation).
    */
-  async getUntranslatedBlocks(bookId: string, targetLang: string): Promise<Block[]> {
+  async getUntranslatedBlocks(bookId: string, targetLang: string, model?: string): Promise<Block[]> {
+    if (model) {
+      const { rows } = await this.pool.query(`
+        SELECT b.* FROM blocks b
+        WHERE b.book_id = $1
+          AND b.source_id IS NULL
+          AND b.type != 'image'
+          AND NOT EXISTS (
+            SELECT 1 FROM blocks t WHERE t.source_id = b.id AND t.lang = $2 AND t.model = $3
+          )
+        ORDER BY b.block_index
+      `, [bookId, targetLang, model]);
+      return rows.map((r: Record<string, any>) => this.mapBlockRow(r));
+    }
     const { rows } = await this.pool.query(`
       SELECT b.* FROM blocks b
       WHERE b.book_id = $1
@@ -348,18 +363,24 @@ export class TranslateDb {
     }));
   }
 
-  async countBlocks(bookId: string, targetLang?: string): Promise<{ total: number; translated: number }> {
+  async countBlocks(bookId: string, targetLang?: string, model?: string): Promise<{ total: number; translated: number }> {
     if (targetLang) {
+      const params: any[] = [bookId, targetLang];
+      let modelFilter = '';
+      if (model) {
+        modelFilter = 'AND model = $3';
+        params.push(model);
+      }
       const { rows } = await this.pool.query(`
         SELECT
           COUNT(*) as total,
           COALESCE(SUM(CASE WHEN t.source_id IS NOT NULL THEN 1 ELSE 0 END), 0) as translated
         FROM blocks b
         LEFT JOIN (
-          SELECT DISTINCT source_id FROM blocks WHERE lang = $2 AND source_id IS NOT NULL
+          SELECT DISTINCT source_id FROM blocks WHERE lang = $2 AND source_id IS NOT NULL ${modelFilter}
         ) t ON t.source_id = b.id
         WHERE b.book_id = $1 AND b.source_id IS NULL
-      `, [bookId, targetLang]);
+      `, params);
       return { total: parseInt(rows[0].total), translated: parseInt(rows[0].translated) };
     }
     const { rows } = await this.pool.query(`

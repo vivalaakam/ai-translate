@@ -8,4 +8,4 @@ dist/
 *.zip
 .env
 test/fixtures/output/
-tmp/*.epubtmp-migrate.ts
+tmp/*.epub

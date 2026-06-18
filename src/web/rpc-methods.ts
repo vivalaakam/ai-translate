@@ -379,21 +379,23 @@ export function registerMethods(router: JsonRpcRouter, deps: {
         throw new RpcError(APP_ERRORS.BOOK_NOT_FOUND.code, APP_ERRORS.BOOK_NOT_FOUND.message);
       }
       const targetLang = book.targetLang || undefined;
-      const counts = await db.countBlocks(book.id, targetLang);
+      const counts = await db.countBlocks(book.id, targetLang, book.model ?? undefined);
       const docPaths = await db.getDocPaths(book.id);
       const chapters = [];
       for (const dp of docPaths) {
-        const blocks = await db.getBlocksByDoc(book.id, dp);
+        let totalBlocks: number;
         let translatedBlocks = 0;
         if (targetLang) {
-          for (const b of blocks) {
-            const t = await db.getTranslation(b.id, targetLang, book.model ?? undefined);
-            if (t) translatedBlocks++;
-          }
+          const blocks = await db.getBlocksByDocWithTranslations(book.id, dp, targetLang, book.model ?? undefined);
+          totalBlocks = blocks.length;
+          translatedBlocks = blocks.filter(b => b.translatedContent != null).length;
+        } else {
+          const blocks = await db.getBlocksByDoc(book.id, dp);
+          totalBlocks = blocks.length;
         }
         chapters.push({
           docPath: dp,
-          totalBlocks: blocks.length,
+          totalBlocks,
           translatedBlocks,
         });
       }

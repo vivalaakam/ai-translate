@@ -275,7 +275,11 @@ describe('JSON-RPC API', () => {
     expect(data.error.code).toBe(10001);
   });
 
-  it.skip('should accept book.upload with file', async () => {
+  // These tests start background upload/translation that requires LM Studio or
+  // an OpenAI-compatible API. Gate behind RUN_E2E to avoid hanging in CI.
+  const RUN_E2E = process.env.RUN_E2E === 'true';
+
+  (RUN_E2E ? it : it.skip)('should accept book.upload with file', async () => {
     const data = await rpcUpload(port, 'book.upload', {}, SAMPLE_EPUB);
     expect(data.result.jobId).toBeTruthy();
     expect(data.result.uploadOnly).toBe(true);
@@ -299,7 +303,7 @@ describe('JSON-RPC API', () => {
     expect(data.error.code).toBe(10002);
   });
 
-  it.skip('should accept book.translate with file and targetLang', async () => {
+  (RUN_E2E ? it : it.skip)('should accept book.translate with file and targetLang', async () => {
     const data = await rpcUpload(port, 'book.translate', { targetLang: 'es', sourceLang: 'en', model: 'llama3.1' }, SAMPLE_EPUB);
     expect(data.result.jobId).toBeTruthy();
     expect(['queued', 'parsing']).toContain(data.result.status);

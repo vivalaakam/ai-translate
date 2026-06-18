@@ -188,7 +188,7 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
     }
 
     // Check if translation already completed
-    const untranslated = await db.getUntranslatedBlocks(bookId, targetLang);
+    const untranslated = await db.getUntranslatedBlocks(bookId, targetLang, model);
     if (untranslated.length === 0) {
       console.log(chalk.green('\n✅ Book is already fully translated!'));
     } else {
@@ -221,7 +221,7 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
         }
       }
 
-      const counts = await db.countBlocks(bookId, targetLang);
+      const counts = await db.countBlocks(bookId, targetLang, model);
       await db.updateBookProgress(bookId, counts.translated);
     }
 
@@ -232,7 +232,7 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
 
     spinner.succeed(chalk.green(`Written to: ${outputPath}`));
 
-    const counts = await db.countBlocks(bookId, targetLang);
+    const counts = await db.countBlocks(bookId, targetLang, model);
     console.log(chalk.cyan(`\n✅ Translation complete!`));
     console.log(chalk.white(`  Blocks: ${counts.translated}/${counts.total} translated`));
     console.log(chalk.white(`  Output: ${outputPath}`));
@@ -284,7 +284,7 @@ async function webCommand(options: Record<string, any>): Promise<void> {
   }
   console.log();
 
-  startServer(port, { ollamaUrl: url, defaultModel: model, apiKey, provider: providerStr });
+  await startServer(port, { ollamaUrl: url, defaultModel: model, apiKey, provider: providerStr });
 }
 
 /**

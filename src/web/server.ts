@@ -167,7 +167,6 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
    * Used by book detail pages and assembled EPUBs to resolve file:ID references.
    */
   app.get('/files/:id', async (req, res): Promise<void> => {
-    const { TranslateDb } = await import('../db/database.js');
     const db = new TranslateDb(dbPath);
     try {
       const file = await db.getFile(req.params.id);
@@ -268,17 +267,20 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
 
 /**
  * Start the web server.
+ * Migrates the database before accepting connections to avoid race conditions.
  */
-export function startServer(port: number = DEFAULT_PORT, options?: { ollamaUrl?: string; defaultModel?: string; apiKey?: string; provider?: string; dbPath?: string }): http.Server {
+export async function startServer(port: number = DEFAULT_PORT, options?: { ollamaUrl?: string; defaultModel?: string; apiKey?: string; provider?: string; dbPath?: string }): Promise<http.Server> {
   const { server, jobQueue } = createApp(options);
 
-  // Run DB migration on startup
+  // Run DB migration before listening to avoid race conditions
   const db = new TranslateDb(options?.dbPath);
-  db.migrate().then(() => {
-    return db.close();
-  }).catch((err: any) => {
+  try {
+    await db.migrate();
+    await db.close();
+  } catch (err: any) {
     console.error('DB migration failed:', err);
-  });
+    process.exit(1);
+  }
 
   server.listen(port, () => {
     console.log(`🌐 ai-translate web server running at http://localhost:${port}`);
