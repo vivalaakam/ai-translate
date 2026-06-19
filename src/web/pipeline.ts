@@ -4,6 +4,7 @@ import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 
 import { TranslateDb, generateBookId } from '../db/database.js';
+import { QueryTypes } from '@sequelize/core';
 import { EpubParser } from '../parsers/epub-parser.js';
 import { Fb2Parser } from '../parsers/fb2-parser.js';
 import { PdfParser, getPdfInfo, renderPdfPage, markdownToHtml } from '../parsers/pdf-parser.js';
@@ -25,8 +26,9 @@ const _loadedOcrModels = new Set<string>();
  * Check if there are any pending or processing ocr_page tasks in the DB.
  */
 async function hasPendingOcrTasks(db: TranslateDb): Promise<boolean> {
-  const { rows } = await db.raw.query(
-    `SELECT COUNT(*) as cnt FROM tasks WHERE type = 'ocr_page' AND status IN ('pending', 'processing')`
+  const rows = await db.sequelize.query<{ cnt: string }>(
+    `SELECT COUNT(*) as cnt FROM tasks WHERE type = 'ocr_page' AND status IN ('pending', 'processing')`,
+    { type: QueryTypes.SELECT },
   );
   return parseInt(rows[0].cnt) > 0;
 }
