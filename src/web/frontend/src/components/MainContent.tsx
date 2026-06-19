@@ -4,17 +4,16 @@ import { BookDetail } from './BookDetail';
 import { JobsView } from './JobsView';
 import { api } from '../api';
 import type { BookRecord, BookDetail as BookDetailType, SystemConfig, TranslationJob } from '../types';
-import type { View } from '../App';
+import type { Route } from '../hooks/useHashRoute';
 
 interface MainContentProps {
-  view: View;
-  selectedBookId: string | null;
+  route: Route;
   books: BookRecord[];
   config: SystemConfig;
   models: string[];
   modelsError: boolean;
   jobs: TranslationJob[];
-  onNavigate: (view: View) => void;
+  onNavigate: (route: Route) => void;
   onSelectBook: (bookId: string | null) => void;
   onRefresh: () => void;
   onSubscribeJob: (jobId: string) => void;
@@ -23,19 +22,21 @@ interface MainContentProps {
 }
 
 export function MainContent(props: MainContentProps) {
+  const { route } = props;
+
   // Breadcrumb rendering
   const renderBreadcrumb = () => {
-    if (props.view === 'library') {
+    if (route.view === 'library') {
       return (
         <div className="breadcrumb">
           <span className="breadcrumb-item active">📖 Library</span>
         </div>
       );
     }
-    if (props.view === 'jobs') {
+    if (route.view === 'jobs') {
       return (
         <div className="breadcrumb">
-          <button className="breadcrumb-link" onClick={() => props.onNavigate('library')}>
+          <button className="breadcrumb-link" onClick={() => props.onNavigate({ view: 'library' })}>
             📖 Library
           </button>
           <span className="breadcrumb-sep">/</span>
@@ -44,10 +45,10 @@ export function MainContent(props: MainContentProps) {
       );
     }
     // detail view
-    const book = props.books.find(b => b.id === props.selectedBookId);
+    const book = props.books.find(b => b.id === route.bookId);
     return (
       <div className="breadcrumb">
-        <button className="breadcrumb-link" onClick={() => props.onNavigate('library')}>
+        <button className="breadcrumb-link" onClick={() => props.onNavigate({ view: 'library' })}>
           📖 Library
         </button>
         <span className="breadcrumb-sep">/</span>
@@ -58,31 +59,31 @@ export function MainContent(props: MainContentProps) {
     );
   };
 
-  if (props.view === 'detail' && props.selectedBookId) {
+  if (route.view === 'detail') {
     return (
       <main className="main">
         <div className="main-header">
-          <button className="btn btn-secondary btn-sm" onClick={() => props.onNavigate('library')}>
+          <button className="btn btn-secondary btn-sm" onClick={() => props.onNavigate({ view: 'library' })}>
             ← Back
           </button>
           {renderBreadcrumb()}
         </div>
         <div className="main-content">
           <BookDetailView
-            bookId={props.selectedBookId}
+            bookId={route.bookId}
             config={props.config}
             models={props.models}
             modelsError={props.modelsError}
             onRefresh={props.onRefresh}
             onSubscribeJob={props.onSubscribeJob}
-            onBack={() => props.onNavigate('library')}
+            onBack={() => props.onNavigate({ view: 'library' })}
           />
         </div>
       </main>
     );
   }
 
-  if (props.view === 'jobs') {
+  if (route.view === 'jobs') {
     return (
       <main className="main">
         <div className="main-header">

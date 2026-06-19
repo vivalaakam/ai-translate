@@ -1,5 +1,5 @@
 import type { BookRecord } from '../types';
-import type { View } from '../App';
+import type { Route } from '../hooks/useHashRoute';
 
 interface SidebarProps {
   books: BookRecord[];
@@ -11,8 +11,8 @@ interface SidebarProps {
   modelsCount: number;
   modelsError: boolean;
   onUploadClick: () => void;
-  currentView: View;
-  onNavigate: (view: View) => void;
+  currentView: Route['view'];
+  onNavigate: (route: Route) => void;
 }
 
 export function Sidebar({
@@ -41,7 +41,7 @@ export function Sidebar({
       <nav className="sidebar-nav">
         <button
           className={`nav-tab ${currentView === 'library' ? 'active' : ''}`}
-          onClick={() => onNavigate('library')}
+          onClick={() => onNavigate({ view: 'library' })}
         >
           <span className="nav-icon">📖</span>
           <span>Library</span>
@@ -49,7 +49,7 @@ export function Sidebar({
         </button>
         <button
           className={`nav-tab ${currentView === 'jobs' ? 'active' : ''}`}
-          onClick={() => onNavigate('jobs')}
+          onClick={() => onNavigate({ view: 'jobs' })}
         >
           <span className="nav-icon">⚙️</span>
           <span>Jobs</span>
