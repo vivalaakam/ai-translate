@@ -15,6 +15,7 @@
     "dev": "tsx src/index.ts",
     "web": "tsx src/index.ts web",
     "typecheck": "tsc --noEmit",
+    "db:migrate": "tsx src/db/migrate.ts",
     "web:build": "cd src/web/frontend && npx vite build",
     "web:dev": "cd src/web/frontend && npx vite"
   },
@@ -28,6 +29,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@sequelize/core": "^7.0.0-alpha.48",
+    "@sequelize/postgres": "^7.0.0-alpha.48",
     "adm-zip": "^0.5.16",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
@@ -41,6 +44,7 @@
     "ora": "^8.2.0",
     "pg": "^8.21.0",
     "turndown": "^7.2.4",
+    "umzug": "^3.8.3",
     "uuid": "^14.0.0",
     "ws": "^8.21.0"
   },
