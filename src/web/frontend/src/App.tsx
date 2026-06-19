@@ -1,23 +1,31 @@
 import { useState, useCallback, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { MainContent } from './components/MainContent';
 import { UploadOverlay } from './components/UploadOverlay';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useBooks, useConfig, useModels } from './hooks/useBooks';
-import { useHashRoute, type Route } from './hooks/useHashRoute';
 import { api } from './api';
 import type { TranslationJob } from './types';
 
 export function App() {
-  const { route, navigate } = useHashRoute();
+  return (
+    <BrowserRouter>
+      <AppInner />
+    </BrowserRouter>
+  );
+}
+
+function AppInner() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [jobUpdate, setJobUpdate] = useState<TranslationJob | null>(null);
   const [uploadJobId, setUploadJobId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<TranslationJob[]>([]);
 
   const { connected, subscribe } = useWebSocket((job) => {
     setJobUpdate(job);
-    // Refresh jobs list when a job update arrives and we're on the jobs view
-    if (route.view === 'jobs') {
+    if (location.pathname === '/jobs') {
       api.jobList().then((data) => setJobs(data.jobs || [])).catch(() => {});
     }
   });
@@ -30,42 +38,50 @@ export function App() {
     subscribe(jobId);
   }, [subscribe]);
 
-  // Navigate helpers
-  const selectBook = useCallback((bookId: string | null) => {
-    if (bookId) {
-      navigate({ view: 'detail', bookId });
-    } else {
-      navigate({ view: 'library' });
-    }
-  }, [navigate]);
-
-  const handleNavigate = useCallback((newRoute: Route) => {
-    navigate(newRoute);
-    if (newRoute.view === 'jobs') {
-      api.jobList().then((data) => setJobs(data.jobs || [])).catch(() => {});
-    }
-  }, [navigate]);
-
-  // When a job update arrives, refresh books
   useEffect(() => {
-    if (jobUpdate) {
-      refresh();
-    }
+    if (jobUpdate) refresh();
   }, [jobUpdate, refresh]);
 
   const handleUploadComplete = useCallback((bookId: string) => {
     refresh();
-    if (bookId) {
-      navigate({ view: 'detail', bookId });
-    } else {
-      navigate({ view: 'library' });
-    }
+    navigate(bookId ? `/book/${bookId}` : '/');
     setUploadJobId(null);
   }, [refresh, navigate]);
 
-  // Derive display values from route
-  const view = route.view;
-  const selectedBookId = route.view === 'detail' ? route.bookId : null;
+  const handleSelectBook = useCallback((bookId: string | null) => {
+    navigate(bookId ? `/book/${bookId}` : '/');
+  }, [navigate]);
+
+  const handleNavigate = useCallback((path: string) => {
+    navigate(path);
+    if (path === '/jobs') {
+      api.jobList().then((data) => setJobs(data.jobs || [])).catch(() => {});
+    }
+  }, [navigate]);
+
+  const view = location.pathname === '/jobs' ? 'jobs'
+    : location.pathname.startsWith('/book/') ? 'detail'
+    : 'library';
+  const selectedBookId = view === 'detail' ? location.pathname.split('/book/')[1] || null : null;
+
+  // Shared props for MainContent — passed to every route
+  const mainProps = {
+    books,
+    config,
+    models,
+    modelsError,
+    jobs,
+    selectedBookId,
+    onNavigate: handleNavigate,
+    onRefresh: refresh,
+    onSubscribeJob: handleJobUpdate,
+    onUploadStart: (jobId: string) => {
+      setUploadJobId(jobId);
+      subscribe(jobId);
+    },
+    onUploadComplete: handleUploadComplete,
+    onSelectBook: handleSelectBook,
+  };
 
   return (
     <div className="app">
@@ -73,32 +89,21 @@ export function App() {
         books={books}
         loading={loading}
         selectedBookId={selectedBookId}
-        onSelectBook={selectBook}
+        onSelectBook={handleSelectBook}
         onRefresh={refresh}
         connected={connected}
         modelsCount={models.length}
         modelsError={modelsError}
-        onUploadClick={() => navigate({ view: 'library' })}
+        onUploadClick={() => navigate('/')}
         currentView={view}
         onNavigate={handleNavigate}
       />
-      <MainContent
-        route={route}
-        books={books}
-        config={config}
-        models={models}
-        modelsError={modelsError}
-        jobs={jobs}
-        onNavigate={handleNavigate}
-        onRefresh={refresh}
-        onSubscribeJob={handleJobUpdate}
-        onUploadStart={(jobId) => {
-          setUploadJobId(jobId);
-          subscribe(jobId);
-        }}
-        onUploadComplete={handleUploadComplete}
-        onSelectBook={selectBook}
-      />
+      <Routes>
+        <Route path="/" element={<MainContent view="library" {...mainProps} />} />
+        <Route path="/jobs" element={<MainContent view="jobs" {...mainProps} />} />
+        <Route path="/book/:bookId" element={<MainContent view="detail" {...mainProps} />} />
+        <Route path="*" element={<MainContent view="library" {...mainProps} />} />
+      </Routes>
       {uploadJobId && <UploadOverlay jobId={uploadJobId} onComplete={handleUploadComplete} />}
     </div>
   );

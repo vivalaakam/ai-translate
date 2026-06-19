@@ -1,19 +1,20 @@
 import { useState, useCallback, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { DropZone } from './DropZone';
 import { BookDetail } from './BookDetail';
 import { JobsView } from './JobsView';
 import { api } from '../api';
 import type { BookRecord, BookDetail as BookDetailType, SystemConfig, TranslationJob } from '../types';
-import type { Route } from '../hooks/useHashRoute';
 
 interface MainContentProps {
-  route: Route;
+  view: 'library' | 'detail' | 'jobs';
+  selectedBookId?: string | null;
   books: BookRecord[];
   config: SystemConfig;
   models: string[];
   modelsError: boolean;
   jobs: TranslationJob[];
-  onNavigate: (route: Route) => void;
+  onNavigate: (path: string) => void;
   onSelectBook: (bookId: string | null) => void;
   onRefresh: () => void;
   onSubscribeJob: (jobId: string) => void;
@@ -22,21 +23,21 @@ interface MainContentProps {
 }
 
 export function MainContent(props: MainContentProps) {
-  const { route } = props;
+  const { view } = props;
 
   // Breadcrumb rendering
   const renderBreadcrumb = () => {
-    if (route.view === 'library') {
+    if (view === 'library') {
       return (
         <div className="breadcrumb">
           <span className="breadcrumb-item active">📖 Library</span>
         </div>
       );
     }
-    if (route.view === 'jobs') {
+    if (view === 'jobs') {
       return (
         <div className="breadcrumb">
-          <button className="breadcrumb-link" onClick={() => props.onNavigate({ view: 'library' })}>
+          <button className="breadcrumb-link" onClick={() => props.onNavigate('/')}>
             📖 Library
           </button>
           <span className="breadcrumb-sep">/</span>
@@ -45,10 +46,10 @@ export function MainContent(props: MainContentProps) {
       );
     }
     // detail view
-    const book = props.books.find(b => b.id === route.bookId);
+    const book = props.books.find(b => b.id === props.selectedBookId);
     return (
       <div className="breadcrumb">
-        <button className="breadcrumb-link" onClick={() => props.onNavigate({ view: 'library' })}>
+        <button className="breadcrumb-link" onClick={() => props.onNavigate('/')}>
           📖 Library
         </button>
         <span className="breadcrumb-sep">/</span>
@@ -59,31 +60,30 @@ export function MainContent(props: MainContentProps) {
     );
   };
 
-  if (route.view === 'detail') {
+  if (view === 'detail') {
     return (
       <main className="main">
         <div className="main-header">
-          <button className="btn btn-secondary btn-sm" onClick={() => props.onNavigate({ view: 'library' })}>
+          <button className="btn btn-secondary btn-sm" onClick={() => props.onNavigate('/')}>
             ← Back
           </button>
           {renderBreadcrumb()}
         </div>
         <div className="main-content">
           <BookDetailView
-            bookId={route.bookId}
             config={props.config}
             models={props.models}
             modelsError={props.modelsError}
             onRefresh={props.onRefresh}
             onSubscribeJob={props.onSubscribeJob}
-            onBack={() => props.onNavigate({ view: 'library' })}
+            onBack={() => props.onNavigate('/')}
           />
         </div>
       </main>
     );
   }
 
-  if (route.view === 'jobs') {
+  if (view === 'jobs') {
     return (
       <main className="main">
         <div className="main-header">
@@ -179,7 +179,6 @@ function BookCard({ book, onClick }: { book: BookRecord; onClick: () => void }) 
 // ── Book detail with data fetching ───────────────
 
 function BookDetailView({
-  bookId,
   config,
   models,
   modelsError,
@@ -187,7 +186,6 @@ function BookDetailView({
   onSubscribeJob,
   onBack,
 }: {
-  bookId: string;
   config: SystemConfig;
   models: string[];
   modelsError: boolean;
@@ -195,11 +193,13 @@ function BookDetailView({
   onSubscribeJob: (jobId: string) => void;
   onBack: () => void;
 }) {
+  const { bookId } = useParams<{ bookId: string }>();
   const [detail, setDetail] = useState<BookDetailType | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
+    if (!bookId) return;
     try {
       const d = await api.bookGet(bookId);
       setDetail(d);

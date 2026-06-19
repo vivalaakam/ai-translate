@@ -275,6 +275,24 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
   // GET / — serve web UI
   // (handled by express.static above)
 
+  // ─── SPA fallback ─────────────────────────────────────────────
+  // Any GET request that didn't match an API route or static file
+  // serves index.html so client-side routing (react-router) works
+  // on page refresh and deep links.
+  app.get('/*splat', (req, res): void => {
+    // Skip API and file download routes — those should 404 on their own
+    if (req.path.startsWith('/rpc') || req.path.startsWith('/exports/') || req.path.startsWith('/files/')) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    const indexPath = path.join(import.meta.dirname, 'public', 'index.html');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.status(404).send('Not found');
+    }
+  });
+
   return { app, server, jobQueue, router };
 }
 
