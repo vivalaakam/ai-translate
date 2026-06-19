@@ -20,6 +20,7 @@ export interface BookRecord {
   status: string;
   totalPages: number;
   parsedPages: number;
+  sourcePath: string | null;
 }
 
 export interface ChapterInfo {

@@ -127,6 +127,7 @@ export async function runUpload(
         status: 'parsing',
         totalPages,
         parsedPages: 0,
+        sourcePath: job.inputPath,
       });
 
       // Create OCR tasks — one per page
@@ -177,6 +178,7 @@ export async function runUpload(
       filename: job.originalFilename,
       totalBlocks: blocks.length,
       status: 'parsed',
+      sourcePath: job.inputPath,
     });
 
     // Store image files
@@ -281,6 +283,7 @@ export async function runTranslation(
         targetLang: job.targetLang,
         sourceLang: job.sourceLang,
         model: job.model,
+        sourcePath: job.inputPath,
       });
     } else {
       await db.setBookTranslationConfig(bookId, job.targetLang, job.sourceLang, job.model);

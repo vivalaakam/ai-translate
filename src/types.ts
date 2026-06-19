@@ -291,6 +291,8 @@ export interface BookRecord {
   totalPages: number;
   /** Parsed pages so far (for PDF OCR progress) */
   parsedPages: number;
+  /** Absolute path to the uploaded source file on disk (for PDF OCR worker) */
+  sourcePath: string | null;
 }
 
 /**

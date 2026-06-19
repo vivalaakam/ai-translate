@@ -200,6 +200,7 @@ export class TranslateDb {
       ALTER TABLE docs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'uploaded';
       ALTER TABLE docs ADD COLUMN IF NOT EXISTS total_pages INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE docs ADD COLUMN IF NOT EXISTS parsed_pages INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE docs ADD COLUMN IF NOT EXISTS source_path TEXT;
     `);
   }
 
@@ -207,8 +208,8 @@ export class TranslateDb {
 
   async insertBook(book: Partial<Omit<BookRecord, 'createdAt' | 'completedAt' | 'translatedBlocks'>> & { id: string; title: string; author: string; language: string; filename: string; totalBlocks: number; translatedBlocks?: number }): Promise<void> {
     await this.pool.query(`
-      INSERT INTO docs (id, title, author, language, filename, total_blocks, translated_blocks, target_lang, source_lang, model, status, total_pages, parsed_pages)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      INSERT INTO docs (id, title, author, language, filename, total_blocks, translated_blocks, target_lang, source_lang, model, status, total_pages, parsed_pages, source_path)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       ON CONFLICT (id) DO NOTHING
     `, [
       book.id,
@@ -224,6 +225,7 @@ export class TranslateDb {
       book.status ?? 'uploaded',
       book.totalPages ?? 0,
       book.parsedPages ?? 0,
+      book.sourcePath ?? null,
     ]);
   }
 
@@ -670,6 +672,7 @@ export class TranslateDb {
       status: row.status ?? 'uploaded',
       totalPages: row.total_pages ?? 0,
       parsedPages: row.parsed_pages ?? 0,
+      sourcePath: row.source_path ?? null,
     };
   }
 

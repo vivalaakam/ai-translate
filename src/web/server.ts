@@ -326,22 +326,37 @@ export async function startServer(port: number = DEFAULT_PORT, options?: { ollam
           return;
         }
 
-        // Find the upload file — check jobQueue first, then .uploads dir
+        // Find the upload file — use source_path from DB, then fallback to jobQueue
         let inputPath: string | null = null;
-        const jobQueueJobs = jobQueue.list();
-        const uploadJob = jobQueueJobs.find(j => j.originalFilename === doc.filename);
-        if (uploadJob) {
-          inputPath = uploadJob.inputPath;
+
+        // Primary: use source_path stored in the book record
+        if (doc.sourcePath && fs.existsSync(doc.sourcePath)) {
+          inputPath = doc.sourcePath;
         }
-        if (!inputPath || !fs.existsSync(inputPath)) {
-          // Try to find in .uploads directory
-          const uploadDir = JobQueue.getUploadDir();
-          const files = fs.readdirSync(uploadDir);
-          const match = files.find(f => f.endsWith(path.extname(doc.filename)));
-          if (match) {
-            inputPath = path.join(uploadDir, match);
+
+        // Fallback: check jobQueue by filename match
+        if (!inputPath) {
+          const jobQueueJobs = jobQueue.list();
+          const uploadJob = jobQueueJobs.find(j => j.originalFilename === doc.filename);
+          if (uploadJob) {
+            inputPath = uploadJob.inputPath;
           }
         }
+
+        // Last resort: try to find in .uploads directory by exact filename match
+        if (!inputPath || !fs.existsSync(inputPath)) {
+          const uploadDir = JobQueue.getUploadDir();
+          if (fs.existsSync(uploadDir)) {
+            const files = fs.readdirSync(uploadDir);
+            // Match by extension — but only use this as a last resort
+            const ext = path.extname(doc.filename);
+            const match = files.find(f => f.endsWith(ext));
+            if (match) {
+              inputPath = path.join(uploadDir, match);
+            }
+          }
+        }
+
         if (!inputPath || !fs.existsSync(inputPath)) {
           console.error(`[worker] Input file not found for doc ${task.docId} (filename=${doc.filename})`);
           await db.failTask(task.id, 'Input file not found');

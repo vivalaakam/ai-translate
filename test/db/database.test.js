@@ -61,6 +61,35 @@ describe('TranslateDb', () => {
     expect(book.translatedBlocks).toBe(0);
   });
 
+  it('should store and retrieve source_path', async () => {
+    await db.insertBook({
+      id: 'book-src-1',
+      title: 'PDF Book',
+      author: 'Author',
+      language: 'en',
+      filename: 'doc.pdf',
+      totalBlocks: 0,
+      sourcePath: '/uploads/12345-abc.pdf',
+    });
+    const book = await db.getBook('book-src-1');
+    expect(book).toBeDefined();
+    expect(book.sourcePath).toBe('/uploads/12345-abc.pdf');
+  });
+
+  it('should default source_path to null when not provided', async () => {
+    await db.insertBook({
+      id: 'book-src-2',
+      title: 'EPUB Book',
+      author: 'Author',
+      language: 'en',
+      filename: 'book.epub',
+      totalBlocks: 5,
+    });
+    const book = await db.getBook('book-src-2');
+    expect(book).toBeDefined();
+    expect(book.sourcePath).toBeNull();
+  });
+
   it('should update book progress', async () => {
     await db.insertBook({
       id: 'book-1',

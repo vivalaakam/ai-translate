@@ -349,14 +349,24 @@ export function registerMethods(router: JsonRpcRouter, deps: {
       const sourceLang = params.sourceLang || 'auto';
       const model = params.model || defaultModel;
 
-      const uploadJobs = jobQueue.list().filter(j => j.originalFilename === book.filename);
-      if (uploadJobs.length === 0) {
+      // Find the uploaded file path — use source_path from DB, fallback to jobQueue
+      let inputPath: string | null = null;
+      if (book.sourcePath && fs.existsSync(book.sourcePath)) {
+        inputPath = book.sourcePath;
+      }
+      if (!inputPath) {
+        const uploadJobs = jobQueue.list().filter(j => j.originalFilename === book.filename);
+        if (uploadJobs.length > 0) {
+          inputPath = uploadJobs[0].inputPath;
+        }
+      }
+      if (!inputPath) {
         throw new RpcError(APP_ERRORS.ORIGINAL_FILE_NOT_FOUND.code, APP_ERRORS.ORIGINAL_FILE_NOT_FOUND.message);
       }
 
       const job = jobQueue.create({
         originalFilename: book.filename,
-        inputPath: uploadJobs[0].inputPath,
+        inputPath,
         targetLang: params.targetLang,
         sourceLang,
         model,

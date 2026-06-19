@@ -7,16 +7,21 @@ import { useBooks, useConfig, useModels } from './hooks/useBooks';
 import { api } from './api';
 import type { TranslationJob } from './types';
 
-export type View = 'library' | 'detail';
+export type View = 'library' | 'detail' | 'jobs';
 
 export function App() {
   const [view, setView] = useState<View>('library');
   const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
   const [jobUpdate, setJobUpdate] = useState<TranslationJob | null>(null);
   const [uploadJobId, setUploadJobId] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<TranslationJob[]>([]);
 
   const { connected, subscribe } = useWebSocket((job) => {
     setJobUpdate(job);
+    // Refresh jobs list when a job update arrives
+    if (view === 'jobs') {
+      api.jobList().then((data) => setJobs(data.jobs || [])).catch(() => {});
+    }
   });
 
   const { books, loading, refresh } = useBooks(jobUpdate);
@@ -32,7 +37,7 @@ export function App() {
     setView(bookId ? 'detail' : 'library');
   }, []);
 
-  // When a job update arrives for the selected book, refresh books
+  // When a job update arrives, refresh books
   useEffect(() => {
     if (jobUpdate) {
       refresh();
@@ -44,6 +49,14 @@ export function App() {
     selectBook(bookId);
     setUploadJobId(null);
   }, [refresh, selectBook]);
+
+  const handleNavigate = useCallback((newView: View) => {
+    setSelectedBookId(null);
+    setView(newView);
+    if (newView === 'jobs') {
+      api.jobList().then((data) => setJobs(data.jobs || [])).catch(() => {});
+    }
+  }, []);
 
   return (
     <div className="app">
@@ -60,6 +73,8 @@ export function App() {
           setSelectedBookId(null);
           setView('library');
         }}
+        currentView={view}
+        onNavigate={handleNavigate}
       />
       <MainContent
         view={view}
@@ -68,7 +83,8 @@ export function App() {
         config={config}
         models={models}
         modelsError={modelsError}
-        onSelectBook={selectBook}
+        jobs={jobs}
+        onNavigate={handleNavigate}
         onRefresh={refresh}
         onSubscribeJob={handleJobUpdate}
         onUploadStart={(jobId) => {
@@ -76,6 +92,7 @@ export function App() {
           subscribe(jobId);
         }}
         onUploadComplete={handleUploadComplete}
+        onSelectBook={selectBook}
       />
       {uploadJobId && <UploadOverlay jobId={uploadJobId} onComplete={handleUploadComplete} />}
     </div>

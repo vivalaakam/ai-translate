@@ -1,4 +1,5 @@
 import type { BookRecord } from '../types';
+import type { View } from '../App';
 
 interface SidebarProps {
   books: BookRecord[];
@@ -10,6 +11,8 @@ interface SidebarProps {
   modelsCount: number;
   modelsError: boolean;
   onUploadClick: () => void;
+  currentView: View;
+  onNavigate: (view: View) => void;
 }
 
 export function Sidebar({
@@ -21,13 +24,38 @@ export function Sidebar({
   modelsCount,
   modelsError,
   onUploadClick,
+  currentView,
+  onNavigate,
 }: SidebarProps) {
+  // Count active jobs (parsing/translating) for badge
+  const activeCount = books.filter(b => b.status === 'parsing' || (b.translatedBlocks > 0 && !b.completedAt)).length;
+
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
         <h1>📚 AI Translate</h1>
         <div className="subtitle">EPUB & FB2 & PDF Translator</div>
       </div>
+
+      {/* Navigation tabs */}
+      <nav className="sidebar-nav">
+        <button
+          className={`nav-tab ${currentView === 'library' ? 'active' : ''}`}
+          onClick={() => onNavigate('library')}
+        >
+          <span className="nav-icon">📖</span>
+          <span>Library</span>
+          {books.length > 0 && <span className="nav-badge">{books.length}</span>}
+        </button>
+        <button
+          className={`nav-tab ${currentView === 'jobs' ? 'active' : ''}`}
+          onClick={() => onNavigate('jobs')}
+        >
+          <span className="nav-icon">⚙️</span>
+          <span>Jobs</span>
+          {activeCount > 0 && <span className="nav-badge active">{activeCount}</span>}
+        </button>
+      </nav>
 
       <div className="sidebar-upload">
         <button className="upload-btn" onClick={onUploadClick}>
