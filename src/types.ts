@@ -285,6 +285,14 @@ export interface BookRecord {
   createdAt: string;
   /** Timestamp when translation was completed */
   completedAt: string | null;
+  /** Doc parsing status: 'uploaded', 'parsing', 'parsed', 'failed' */
+  status: string;
+  /** Total pages (for PDF, 0 for EPUB/FB2) */
+  totalPages: number;
+  /** Parsed pages so far (for PDF OCR progress) */
+  parsedPages: number;
+  /** Absolute path to the uploaded source file on disk (for PDF OCR worker) */
+  sourcePath: string | null;
 }
 
 /**
@@ -304,4 +312,33 @@ export interface FileRecord {
   data: Buffer;
   /** ISO timestamp when file was imported */
   createdAt: string;
+}
+
+/**
+ * A task record stored in the tasks table.
+ * Used for async PDF OCR processing — one task per page.
+ */
+export interface TaskRecord {
+  /** UUID v4 task ID */
+  id: string;
+  /** Foreign key to docs.id */
+  docId: string;
+  /** Task type: 'ocr_page' */
+  type: string;
+  /** Page number (1-based) for OCR tasks */
+  pageNum: number | null;
+  /** Total pages in the document */
+  totalPages: number | null;
+  /** Task status: 'pending', 'processing', 'completed', 'failed' */
+  status: string;
+  /** Extracted text content (for OCR tasks, set on completion) */
+  content: string | null;
+  /** Error message (set on failure) */
+  error: string | null;
+  /** Timestamp when task was created */
+  createdAt: string;
+  /** Timestamp when task was last updated */
+  updatedAt: string;
+  /** Timestamp when task was completed or failed */
+  completedAt: string | null;
 }

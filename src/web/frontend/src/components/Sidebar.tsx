@@ -10,6 +10,8 @@ interface SidebarProps {
   modelsCount: number;
   modelsError: boolean;
   onUploadClick: () => void;
+  currentView: 'library' | 'detail' | 'jobs';
+  onNavigate: (path: string) => void;
 }
 
 export function Sidebar({
@@ -21,13 +23,38 @@ export function Sidebar({
   modelsCount,
   modelsError,
   onUploadClick,
+  currentView,
+  onNavigate,
 }: SidebarProps) {
+  // Count active jobs (parsing/translating) for badge
+  const activeCount = books.filter(b => b.status === 'parsing' || (b.translatedBlocks > 0 && !b.completedAt)).length;
+
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
         <h1>📚 AI Translate</h1>
-        <div className="subtitle">EPUB & FB2 Translator</div>
+        <div className="subtitle">EPUB & FB2 & PDF Translator</div>
       </div>
+
+      {/* Navigation tabs */}
+      <nav className="sidebar-nav">
+        <button
+          className={`nav-tab ${currentView === 'library' ? 'active' : ''}`}
+          onClick={() => onNavigate('/')}
+        >
+          <span className="nav-icon">📖</span>
+          <span>Library</span>
+          {books.length > 0 && <span className="nav-badge">{books.length}</span>}
+        </button>
+        <button
+          className={`nav-tab ${currentView === 'jobs' ? 'active' : ''}`}
+          onClick={() => onNavigate('/jobs')}
+        >
+          <span className="nav-icon">⚙️</span>
+          <span>Jobs</span>
+          {activeCount > 0 && <span className="nav-badge active">{activeCount}</span>}
+        </button>
+      </nav>
 
       <div className="sidebar-upload">
         <button className="upload-btn" onClick={onUploadClick}>
@@ -83,9 +110,11 @@ function BookListItem({
   const pct = total > 0 ? Math.round((translated / total) * 100) : 0;
   const isComplete = book.completedAt !== null;
   const isTranslating = translated > 0 && !isComplete;
+  const isParsing = book.status === 'parsing';
+  const parsePct = book.totalPages > 0 ? Math.round((book.parsedPages / book.totalPages) * 100) : 0;
 
   const className = `book-item ${active ? 'active' : ''} ${
-    isComplete ? 'completed' : isTranslating ? 'translating' : ''
+    isComplete ? 'completed' : isTranslating ? 'translating' : isParsing ? 'translating' : ''
   }`;
 
   return (
@@ -94,6 +123,8 @@ function BookListItem({
         <div className="book-item-title">{book.title || book.filename}</div>
         {isComplete ? (
           <span className="badge completed">done</span>
+        ) : isParsing ? (
+          <span className="badge translating">parsing {parsePct}%</span>
         ) : isTranslating ? (
           <span className="badge translating">translating</span>
         ) : (
@@ -106,7 +137,15 @@ function BookListItem({
         <span>✅ {translated}</span>
         <span>🌍 {book.language || '?'}</span>
       </div>
-      {translated > 0 && (
+      {isParsing && book.totalPages > 0 && (
+        <div className="mini-bar">
+          <div
+            className="mini-bar-fill"
+            style={{ width: `${parsePct}%` }}
+          />
+        </div>
+      )}
+      {translated > 0 && !isParsing && (
         <div className="mini-bar">
           <div
             className={`mini-bar-fill ${isComplete ? 'completed' : ''}`}

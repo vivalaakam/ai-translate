@@ -14,8 +14,8 @@ export function DropZone({ onUploadStart, onUploadComplete }: DropZoneProps) {
 
   const handleFile = useCallback(async (file: File) => {
     const ext = file.name.split('.').pop()?.toLowerCase();
-    if (ext !== 'epub' && ext !== 'fb2') {
-      setError('Only .epub and .fb2 files are supported');
+    if (ext !== 'epub' && ext !== 'fb2' && ext !== 'pdf') {
+      setError('Only .epub, .fb2 and .pdf files are supported');
       return;
     }
     setError(null);
@@ -40,7 +40,7 @@ export function DropZone({ onUploadStart, onUploadComplete }: DropZoneProps) {
   }, [handleFile]);
 
   const labelClick = !uploading ? 'Click to upload' : '';
-  const labelDrag = !uploading ? ' or drag and drop your EPUB/FB2 file' : '';
+  const labelDrag = !uploading ? ' or drag and drop your EPUB/FB2/PDF file' : '';
   const labelText = uploading ? 'Uploading and parsing...' : '';
 
   return (
@@ -60,11 +60,11 @@ export function DropZone({ onUploadStart, onUploadComplete }: DropZoneProps) {
             <span><strong>{labelClick}</strong>{labelDrag}</span>
           )}
         </div>
-        <div className="hint">Supported formats: .epub, .fb2</div>
+        <div className="hint">Supported formats: .epub, .fb2, .pdf</div>
         <input
           ref={fileInputRef}
           type="file"
-          accept=".epub,.fb2"
+          accept=".epub,.fb2,.pdf"
           style={{ display: 'none' }}
           onChange={(e) => {
             if (e.target.files && e.target.files.length) handleFile(e.target.files[0]);

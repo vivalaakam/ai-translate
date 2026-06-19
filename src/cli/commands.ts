@@ -7,13 +7,14 @@ import fs from 'fs';
 
 import { EpubParser } from '../parsers/epub-parser.js';
 import { Fb2Parser } from '../parsers/fb2-parser.js';
+import { PdfParser } from '../parsers/pdf-parser.js';
 import { EpubWriter } from '../parsers/epub-writer.js';
 import { OllamaClient } from '../translators/ollama-client.js';
 import { TranslateDb, generateBookId } from '../db/database.js';
 import { extractAllBlocks } from '../parsers/block-extractor.js';
 import { assembleDocHtml } from '../parsers/block-assembler.js';
 import { assembleEpub } from '../parsers/epub-assembler.js';
-import { SUPPORTED_INPUT_FORMATS, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_CHUNK_SIZE, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER } from '../utils/constants.js';
+import { SUPPORTED_INPUT_FORMATS, OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER } from '../utils/constants.js';
 import { formatProgress, formatStats } from './progress.js';
 import { startServer } from '../web/server.js';
 import { parseProvider, ensureModelLoaded, unloadIfWeLoaded } from '../translators/model-manager.js';
@@ -26,6 +27,7 @@ function detectFormat(filePath: string): string | null {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.epub') return 'epub';
   if (ext === '.fb2') return 'fb2';
+  if (ext === '.pdf') return 'pdf';
   return null;
 }
 
@@ -126,9 +128,17 @@ async function translateCommand(inputFile: string, options: Record<string, any>)
     if (format === 'epub') {
       const parser = new EpubParser(inputFile);
       parsed = await parser.parse();
-    } else {
+    } else if (format === 'fb2') {
       const parser = new Fb2Parser(inputFile);
       parsed = await parser.parse();
+    } else if (format === 'pdf') {
+      const parser = new PdfParser(inputFile, { ollamaUrl: url, apiKey });
+      spinner.text = 'OCR: rendering pages and extracting text...';
+      parsed = await parser.parse((current, total) => {
+        spinner.text = `OCR page ${current}/${total}...`;
+      });
+    } else {
+      throw new Error(`Unsupported format: ${format}`);
     }
     spinner.succeed(`Parsed ${format.toUpperCase()} (${parsed.contentDocs.length} content documents)`);
 

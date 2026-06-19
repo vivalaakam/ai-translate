@@ -14,18 +14,20 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // Clean up any leftover test data, then close.
+  await db.raw.query(`DELETE FROM tasks WHERE doc_id LIKE 'test-%' OR doc_id LIKE 'book-%'`);
   await db.raw.query(`DELETE FROM blocks WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
   await db.raw.query(`DELETE FROM files WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
-  await db.raw.query(`DELETE FROM books WHERE id LIKE 'test-%' OR id LIKE 'book-%'`);
+  await db.raw.query(`DELETE FROM docs WHERE id LIKE 'test-%' OR id LIKE 'book-%'`);
   await db.close();
   await TranslateDb.closePool();
 });
 
 // Helper to clean all test-related rows before each test for isolation
 async function cleanup() {
+  await db.raw.query(`DELETE FROM tasks WHERE doc_id LIKE 'test-%' OR doc_id LIKE 'book-%'`);
   await db.raw.query(`DELETE FROM blocks WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
   await db.raw.query(`DELETE FROM files WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
-  await db.raw.query(`DELETE FROM books WHERE id LIKE 'test-%' OR id LIKE 'book-%'`);
+  await db.raw.query(`DELETE FROM docs WHERE id LIKE 'test-%' OR id LIKE 'book-%'`);
 }
 
 describe('TranslateDb', () => {
@@ -37,9 +39,10 @@ describe('TranslateDb', () => {
       `SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`,
     );
     const names = rows.map((r) => r.tablename);
-    expect(names).toContain('books');
+    expect(names).toContain('docs');
     expect(names).toContain('blocks');
     expect(names).toContain('files');
+    expect(names).toContain('tasks');
   });
 
   it('should insert and retrieve a book', async () => {
@@ -56,6 +59,35 @@ describe('TranslateDb', () => {
     expect(book.title).toBe('Test Book');
     expect(book.totalBlocks).toBe(10);
     expect(book.translatedBlocks).toBe(0);
+  });
+
+  it('should store and retrieve source_path', async () => {
+    await db.insertBook({
+      id: 'book-src-1',
+      title: 'PDF Book',
+      author: 'Author',
+      language: 'en',
+      filename: 'doc.pdf',
+      totalBlocks: 0,
+      sourcePath: '/uploads/12345-abc.pdf',
+    });
+    const book = await db.getBook('book-src-1');
+    expect(book).toBeDefined();
+    expect(book.sourcePath).toBe('/uploads/12345-abc.pdf');
+  });
+
+  it('should default source_path to null when not provided', async () => {
+    await db.insertBook({
+      id: 'book-src-2',
+      title: 'EPUB Book',
+      author: 'Author',
+      language: 'en',
+      filename: 'book.epub',
+      totalBlocks: 5,
+    });
+    const book = await db.getBook('book-src-2');
+    expect(book).toBeDefined();
+    expect(book.sourcePath).toBeNull();
   });
 
   it('should update book progress', async () => {
@@ -630,5 +662,167 @@ describe('generateBlockId', () => {
     const id1 = generateBlockId('book-1', 'Hello');
     const id2 = generateBlockId('book-1', 'World');
     expect(id1).not.toBe(id2);
+  });
+});
+
+describe('Task CRUD', () => {
+  beforeEach(cleanup);
+
+  it('should create and retrieve tasks', async () => {
+    await db.insertBook({
+      id: 'test-doc-tasks',
+      title: 'Test PDF',
+      author: '',
+      language: 'en',
+      filename: 'test.pdf',
+      totalBlocks: 0,
+    });
+
+    await db.createTasks([
+      { id: 'task-1', docId: 'test-doc-tasks', type: 'ocr_page', pageNum: 1, totalPages: 3 },
+      { id: 'task-2', docId: 'test-doc-tasks', type: 'ocr_page', pageNum: 2, totalPages: 3 },
+      { id: 'task-3', docId: 'test-doc-tasks', type: 'ocr_page', pageNum: 3, totalPages: 3 },
+    ]);
+
+    const tasks = await db.getTasksByDoc('test-doc-tasks');
+    expect(tasks).toHaveLength(3);
+    expect(tasks[0].pageNum).toBe(1);
+    expect(tasks[0].status).toBe('pending');
+    expect(tasks[1].pageNum).toBe(2);
+    expect(tasks[2].pageNum).toBe(3);
+  });
+
+  it('should get next task and mark it processing', async () => {
+    await db.insertBook({
+      id: 'test-doc-next',
+      title: 'Test',
+      author: '',
+      language: 'en',
+      filename: 'test.pdf',
+      totalBlocks: 0,
+    });
+
+    await db.createTasks([
+      { id: 'task-next-1', docId: 'test-doc-next', type: 'ocr_page', pageNum: 1, totalPages: 2 },
+      { id: 'task-next-2', docId: 'test-doc-next', type: 'ocr_page', pageNum: 2, totalPages: 2 },
+    ]);
+
+    // Clean up any stray pending tasks from other tests
+    await db.raw.query(`UPDATE tasks SET status = 'cancelled' WHERE doc_id != 'test-doc-next' AND status = 'pending'`);
+
+    const task = await db.getNextTask();
+    expect(task).toBeDefined();
+    expect(task.status).toBe('processing');
+    expect(task.docId).toBe('test-doc-next');
+    expect(task.pageNum).toBe(1);
+
+    // Next call should get the second task
+    const task2 = await db.getNextTask();
+    expect(task2).toBeDefined();
+    expect(task2.status).toBe('processing');
+    expect(task2.pageNum).toBe(2);
+
+    // Third call should return undefined
+    const task3 = await db.getNextTask();
+    expect(task3).toBeUndefined();
+  });
+
+  it('should complete a task with content', async () => {
+    await db.insertBook({
+      id: 'test-doc-complete',
+      title: 'Test',
+      author: '',
+      language: 'en',
+      filename: 'test.pdf',
+      totalBlocks: 0,
+    });
+
+    await db.createTasks([
+      { id: 'task-complete-1', docId: 'test-doc-complete', type: 'ocr_page', pageNum: 1, totalPages: 1 },
+    ]);
+
+    // Clean up any stray pending tasks from other tests
+    await db.raw.query(`UPDATE tasks SET status = 'cancelled' WHERE doc_id != 'test-doc-complete' AND status = 'pending'`);
+
+    const task = await db.getNextTask();
+    expect(task).toBeDefined();
+    expect(task.id).toBe('task-complete-1');
+    await db.completeTask(task.id, '# Heading\n\nParagraph text');
+
+    const tasks = await db.getTasksByDoc('test-doc-complete');
+    expect(tasks[0].status).toBe('completed');
+    expect(tasks[0].content).toBe('# Heading\n\nParagraph text');
+    expect(tasks[0].completedAt).not.toBeNull();
+  });
+
+  it('should fail a task with error', async () => {
+    await db.insertBook({
+      id: 'test-doc-fail',
+      title: 'Test',
+      author: '',
+      language: 'en',
+      filename: 'test.pdf',
+      totalBlocks: 0,
+    });
+
+    await db.createTasks([
+      { id: 'task-fail-1', docId: 'test-doc-fail', type: 'ocr_page', pageNum: 1, totalPages: 1 },
+    ]);
+
+    // Clean up any stray pending tasks from other tests
+    await db.raw.query(`UPDATE tasks SET status = 'cancelled' WHERE doc_id != 'test-doc-fail' AND status = 'pending'`);
+
+    const task = await db.getNextTask();
+    expect(task).toBeDefined();
+    expect(task.id).toBe('task-fail-1');
+    await db.failTask(task.id, 'OCR failed');
+
+    const tasks = await db.getTasksByDoc('test-doc-fail');
+    expect(tasks[0].status).toBe('failed');
+    expect(tasks[0].error).toBe('OCR failed');
+  });
+
+  it('should get task counts', async () => {
+    await db.insertBook({
+      id: 'test-doc-counts',
+      title: 'Test',
+      author: '',
+      language: 'en',
+      filename: 'test.pdf',
+      totalBlocks: 0,
+    });
+
+    await db.createTasks([
+      { id: 'task-cnt-1', docId: 'test-doc-counts', type: 'ocr_page', pageNum: 1, totalPages: 3 },
+      { id: 'task-cnt-2', docId: 'test-doc-counts', type: 'ocr_page', pageNum: 2, totalPages: 3 },
+      { id: 'task-cnt-3', docId: 'test-doc-counts', type: 'ocr_page', pageNum: 3, totalPages: 3 },
+    ]);
+
+    // Complete one task
+    await db.completeTask('task-cnt-1', 'content');
+
+    const counts = await db.getTaskCounts('test-doc-counts');
+    expect(counts.total).toBe(3);
+    expect(counts.completed).toBe(1);
+    expect(counts.pending).toBe(2);
+    expect(counts.processing).toBe(0);
+    expect(counts.failed).toBe(0);
+  });
+
+  it('should update doc status', async () => {
+    await db.insertBook({
+      id: 'test-doc-status',
+      title: 'Test',
+      author: '',
+      language: 'en',
+      filename: 'test.pdf',
+      totalBlocks: 0,
+    });
+
+    await db.updateDocStatus('test-doc-status', 'parsing', { totalPages: 10, parsedPages: 3 });
+    const book = await db.getBook('test-doc-status');
+    expect(book.status).toBe('parsing');
+    expect(book.totalPages).toBe(10);
+    expect(book.parsedPages).toBe(3);
   });
 });

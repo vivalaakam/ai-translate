@@ -1,16 +1,20 @@
 import { useState, useCallback, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { DropZone } from './DropZone';
 import { BookDetail } from './BookDetail';
+import { JobsView } from './JobsView';
 import { api } from '../api';
-import type { BookRecord, BookDetail as BookDetailType, SystemConfig } from '../types';
+import type { BookRecord, BookDetail as BookDetailType, SystemConfig, TranslationJob } from '../types';
 
 interface MainContentProps {
-  view: 'library' | 'detail';
-  selectedBookId: string | null;
+  view: 'library' | 'detail' | 'jobs';
+  selectedBookId?: string | null;
   books: BookRecord[];
   config: SystemConfig;
   models: string[];
   modelsError: boolean;
+  jobs: TranslationJob[];
+  onNavigate: (path: string) => void;
   onSelectBook: (bookId: string | null) => void;
   onRefresh: () => void;
   onSubscribeJob: (jobId: string) => void;
@@ -19,48 +23,162 @@ interface MainContentProps {
 }
 
 export function MainContent(props: MainContentProps) {
-  if (props.view === 'detail' && props.selectedBookId) {
+  const { view } = props;
+
+  // Breadcrumb rendering
+  const renderBreadcrumb = () => {
+    if (view === 'library') {
+      return (
+        <div className="breadcrumb">
+          <span className="breadcrumb-item active">📖 Library</span>
+        </div>
+      );
+    }
+    if (view === 'jobs') {
+      return (
+        <div className="breadcrumb">
+          <button className="breadcrumb-link" onClick={() => props.onNavigate('/')}>
+            📖 Library
+          </button>
+          <span className="breadcrumb-sep">/</span>
+          <span className="breadcrumb-item active">⚙️ Jobs</span>
+        </div>
+      );
+    }
+    // detail view
+    const book = props.books.find(b => b.id === props.selectedBookId);
+    return (
+      <div className="breadcrumb">
+        <button className="breadcrumb-link" onClick={() => props.onNavigate('/')}>
+          📖 Library
+        </button>
+        <span className="breadcrumb-sep">/</span>
+        <span className="breadcrumb-item active">
+          {book?.title || 'Book details'}
+        </span>
+      </div>
+    );
+  };
+
+  if (view === 'detail') {
     return (
       <main className="main">
         <div className="main-header">
-          <button className="btn btn-secondary" onClick={() => props.onSelectBook(null)}>
+          <button className="btn btn-secondary btn-sm" onClick={() => props.onNavigate('/')}>
             ← Back
           </button>
+          {renderBreadcrumb()}
         </div>
         <div className="main-content">
           <BookDetailView
-            bookId={props.selectedBookId}
             config={props.config}
             models={props.models}
             modelsError={props.modelsError}
             onRefresh={props.onRefresh}
             onSubscribeJob={props.onSubscribeJob}
-            onBack={() => props.onSelectBook(null)}
+            onBack={() => props.onNavigate('/')}
           />
         </div>
       </main>
     );
   }
 
+  if (view === 'jobs') {
+    return (
+      <main className="main">
+        <div className="main-header">
+          {renderBreadcrumb()}
+        </div>
+        <div className="main-content">
+          <JobsView
+            jobs={props.jobs}
+            onRefresh={props.onRefresh}
+            onSubscribeJob={props.onSubscribeJob}
+          />
+        </div>
+      </main>
+    );
+  }
+
+  // Library view: drop zone + book cards grid
   return (
     <main className="main">
       <div className="main-header">
-        <span style={{ fontSize: 16, fontWeight: 600 }}>Upload Book</span>
+        {renderBreadcrumb()}
+        <span className="main-header-count">
+          {props.books.length} book{props.books.length !== 1 ? 's' : ''}
+        </span>
       </div>
       <div className="main-content">
         <DropZone
           onUploadStart={props.onUploadStart}
           onUploadComplete={props.onUploadComplete}
         />
+        {props.books.length > 0 && (
+          <div className="books-grid">
+            {props.books.map((book) => (
+              <BookCard
+                key={book.id}
+                book={book}
+                onClick={() => props.onSelectBook(book.id)}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </main>
+  );
+}
+
+// ── Book card for library grid ───────────────────
+
+function BookCard({ book, onClick }: { book: BookRecord; onClick: () => void }) {
+  const total = book.totalBlocks || 0;
+  const translated = book.translatedBlocks || 0;
+  const pct = total > 0 ? Math.round((translated / total) * 100) : 0;
+  const isComplete = book.completedAt !== null;
+  const isTranslating = translated > 0 && !isComplete;
+  const isParsing = book.status === 'parsing';
+  const parsePct = book.totalPages > 0 ? Math.round((book.parsedPages / book.totalPages) * 100) : 0;
+  const ext = book.filename?.split('.').pop()?.toUpperCase() || '?';
+
+  return (
+    <div className={`book-card ${isComplete ? 'completed' : ''}`} onClick={onClick}>
+      <div className="book-card-top">
+        <div className="book-card-format">{ext}</div>
+        {isComplete ? (
+          <span className="badge completed">✓ done</span>
+        ) : isParsing ? (
+          <span className="badge translating">parsing {parsePct}%</span>
+        ) : isTranslating ? (
+          <span className="badge translating">{pct}%</span>
+        ) : (
+          <span className="badge queued">parsed</span>
+        )}
+      </div>
+      <div className="book-card-title">{book.title || book.filename}</div>
+      <div className="book-card-author">{book.author || 'Unknown author'}</div>
+      <div className="book-card-stats">
+        <span>📄 {total}</span>
+        <span>✅ {translated}</span>
+        <span>🌍 {book.language || '?'}</span>
+        {book.targetLang && <span>→ {book.targetLang}</span>}
+      </div>
+      {(translated > 0 || isParsing) && (
+        <div className="mini-bar">
+          <div
+            className={`mini-bar-fill ${isComplete ? 'completed' : ''}`}
+            style={{ width: `${isParsing ? parsePct : pct}%` }}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
 // ── Book detail with data fetching ───────────────
 
 function BookDetailView({
-  bookId,
   config,
   models,
   modelsError,
@@ -68,7 +186,6 @@ function BookDetailView({
   onSubscribeJob,
   onBack,
 }: {
-  bookId: string;
   config: SystemConfig;
   models: string[];
   modelsError: boolean;
@@ -76,11 +193,13 @@ function BookDetailView({
   onSubscribeJob: (jobId: string) => void;
   onBack: () => void;
 }) {
+  const { bookId } = useParams<{ bookId: string }>();
   const [detail, setDetail] = useState<BookDetailType | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
+    if (!bookId) return;
     try {
       const d = await api.bookGet(bookId);
       setDetail(d);

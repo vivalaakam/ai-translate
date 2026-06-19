@@ -68,7 +68,7 @@ At the end of every task, before reporting completion, you MUST:
 Do NOT skip any of these steps. Do NOT report "done" without running tests and committing.
 
 ## Environment Variables
-See `.env.example` — DATABASE_URL, OPENAI_BASE_URL, OLLAMA_MODEL, OPENAI_API_KEY, LLM_PROVIDER, CHUNK_SIZE, PORT
+See `.env.example` — DATABASE_URL, OPENAI_BASE_URL, TRANSLATE_MODEL, OCR_MODEL, OPENAI_API_KEY, LLM_PROVIDER, CHUNK_SIZE, PORT
 
 ## File Structure
 ```

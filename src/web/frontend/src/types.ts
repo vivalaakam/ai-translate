@@ -17,6 +17,10 @@ export interface BookRecord {
   model: string | null;
   createdAt: string;
   completedAt: string | null;
+  status: string;
+  totalPages: number;
+  parsedPages: number;
+  sourcePath: string | null;
 }
 
 export interface ChapterInfo {

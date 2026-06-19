@@ -10,7 +10,8 @@ import { JsonRpcRouter, RPC_ERRORS } from './jsonrpc.js';
 import type { JsonRpcRequest, JsonRpcResponse } from './jsonrpc.js';
 import { registerMethods } from './rpc-methods.js';
 import { TranslateDb } from '../db/database.js';
-import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER, UPLOAD_ONLY } from '../utils/constants.js';
+import { processOcrTask } from './pipeline.js';
+import { OLLAMA_DEFAULT_URL, DEFAULT_MODEL, DEFAULT_OCR_MODEL, DEFAULT_PORT, DEFAULT_API_KEY, DEFAULT_LLM_PROVIDER, UPLOAD_ONLY } from '../utils/constants.js';
 import type { TranslationJob } from '../types.js';
 
 // Storage config
@@ -27,10 +28,10 @@ const upload = multer({
   storage,
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (ext === '.epub' || ext === '.fb2') {
+    if (ext === '.epub' || ext === '.fb2' || ext === '.pdf') {
       cb(null, true);
     } else {
-      cb(new Error('Only .epub and .fb2 files are allowed'));
+      cb(new Error('Only .epub, .fb2 and .pdf files are allowed'));
     }
   },
   limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
@@ -42,6 +43,15 @@ interface WSClient {
   jobId?: string;
 }
 const wsClients: Set<WSClient> = new Set();
+
+// Config for the task worker (set in createApp, used in startServer)
+let _workerConfig: { ollamaUrl: string; apiKey: string; dbPath?: string; ocrModel: string; provider: string } = {
+  ollamaUrl: OLLAMA_DEFAULT_URL,
+  apiKey: DEFAULT_API_KEY,
+  dbPath: undefined,
+  ocrModel: '',
+  provider: '',
+};
 
 /**
  * Create and configure the Express app + WebSocket server + JSON-RPC router.
@@ -59,6 +69,9 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
   const apiKey = options?.apiKey || DEFAULT_API_KEY;
   const provider = options?.provider || DEFAULT_LLM_PROVIDER;
   const dbPath = options?.dbPath;
+
+  // Store config for task worker
+  _workerConfig = { ollamaUrl, apiKey, dbPath, ocrModel: DEFAULT_OCR_MODEL, provider };
 
   // Job queue with WebSocket broadcast
   const jobQueue = new JobQueue((job) => {
@@ -262,6 +275,24 @@ export function createApp(options?: { ollamaUrl?: string; defaultModel?: string;
   // GET / — serve web UI
   // (handled by express.static above)
 
+  // ─── SPA fallback ─────────────────────────────────────────────
+  // Any GET request that didn't match an API route or static file
+  // serves index.html so client-side routing (react-router) works
+  // on page refresh and deep links.
+  app.get('/*splat', (req, res): void => {
+    // Skip API and file download routes — those should 404 on their own
+    if (req.path.startsWith('/rpc') || req.path.startsWith('/exports/') || req.path.startsWith('/files/')) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    const indexPath = path.join(import.meta.dirname, 'public', 'index.html');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.status(404).send('Not found');
+    }
+  });
+
   return { app, server, jobQueue, router };
 }
 
@@ -290,6 +321,79 @@ export async function startServer(port: number = DEFAULT_PORT, options?: { ollam
     }
     console.log(`   WebSocket: ws://localhost:${port}/ws`);
   });
+
+  // ── Task worker: process pending OCR tasks ──────────────────
+  const workerInterval = setInterval(async () => {
+    try {
+      const db = new TranslateDb(_workerConfig.dbPath);
+      try {
+        // Limit concurrent processing to 1 task at a time
+        const processing = await db.countProcessingTasks();
+        if (processing > 0) return;
+
+        const task = await db.getNextTask();
+        if (!task) return;
+
+        console.log(`[worker] Picked up task ${task.id} (doc=${task.docId}, page=${task.pageNum}/${task.totalPages})`);
+
+        // Find the uploaded file path for this doc
+        const doc = await db.getBook(task.docId);
+        if (!doc) {
+          console.error(`[worker] Doc ${task.docId} not found for task ${task.id}`);
+          await db.failTask(task.id, 'Doc not found');
+          return;
+        }
+
+        // Find the upload file — use source_path from DB, then fallback to jobQueue
+        let inputPath: string | null = null;
+
+        // Primary: use source_path stored in the book record
+        if (doc.sourcePath && fs.existsSync(doc.sourcePath)) {
+          inputPath = doc.sourcePath;
+        }
+
+        // Fallback: check jobQueue by filename match
+        if (!inputPath) {
+          const jobQueueJobs = jobQueue.list();
+          const uploadJob = jobQueueJobs.find(j => j.originalFilename === doc.filename);
+          if (uploadJob) {
+            inputPath = uploadJob.inputPath;
+          }
+        }
+
+        // Last resort: try to find in .uploads directory by exact filename match
+        if (!inputPath || !fs.existsSync(inputPath)) {
+          const uploadDir = JobQueue.getUploadDir();
+          if (fs.existsSync(uploadDir)) {
+            const files = fs.readdirSync(uploadDir);
+            // Match by extension — but only use this as a last resort
+            const ext = path.extname(doc.filename);
+            const match = files.find(f => f.endsWith(ext));
+            if (match) {
+              inputPath = path.join(uploadDir, match);
+            }
+          }
+        }
+
+        if (!inputPath || !fs.existsSync(inputPath)) {
+          console.error(`[worker] Input file not found for doc ${task.docId} (filename=${doc.filename})`);
+          await db.failTask(task.id, 'Input file not found');
+          return;
+        }
+
+        console.log(`[worker] Starting OCR for task ${task.id}, file=${inputPath}, model=${_workerConfig.ocrModel}, url=${_workerConfig.ollamaUrl}`);
+
+        // Process task asynchronously (don't block the worker loop)
+        processOcrTask(task, inputPath, _workerConfig.ollamaUrl, _workerConfig.apiKey, _workerConfig.ocrModel, _workerConfig.provider).catch(err => {
+          console.error(`[worker] Task ${task.id} uncaught error:`, err.message, err.stack);
+        });
+      } finally {
+        await db.close();
+      }
+    } catch (err: any) {
+      console.error(`[worker] Poll error:`, err.message);
+    }
+  }, 3000); // Poll every 3 seconds
 
   // Cleanup old jobs every hour
   setInterval(() => {
