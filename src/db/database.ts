@@ -1,32 +1,24 @@
-import path from 'path';
-import { Pool, types } from 'pg';
 import { v5 as uuidv5 } from 'uuid';
 import jsSha3 from 'js-sha3';
-const keccak256: (data: string | ArrayBuffer | Buffer) => string = (jsSha3 as any).keccak256;
-import { DATABASE_URL } from '../utils/constants.js';
+import { QueryTypes, sql } from '@sequelize/core';
 import type { Block, BookRecord, BlockType, FileRecord, TaskRecord } from '../types.js';
+import {
+  Doc,
+  Block as BlockModel,
+  FileModel,
+  Task as TaskModel,
+  getSequelize,
+  closeSequelize,
+} from '../models/index.js';
+import { runMigrations } from './migrate.js';
+
+const keccak256: (data: string | ArrayBuffer | Buffer) => string = (jsSha3 as any).keccak256;
 
 // UUID v5 namespaces for deterministic IDs
 const BOOK_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 const BLOCK_NAMESPACE = '6ba7b811-9dad-11d1-80b4-00c04fd430c8';
 const FILE_NAMESPACE = '6ba7b812-9dad-11d1-80b4-00c04fd430c8';
 const TRANSLATION_NAMESPACE = '6ba7b813-9dad-11d1-80b4-00c04fd430c8';
-
-// Make pg return BYTEA as Buffer (OID 17).
-// pg natively returns BYTEA as Buffer in binary mode; in text mode it returns
-// a "\\x<hex>" string. We normalize both to Buffer.
-types.setTypeParser(17, (val: string | Buffer) => {
-  if (Buffer.isBuffer(val)) return val;
-  if (typeof val !== 'string') return Buffer.from(val);
-  // pg text format: \x<hex>
-  if (val.startsWith('\\x')) {
-    return Buffer.from(val.slice(2), 'hex');
-  }
-  return Buffer.from(val, 'hex');
-});
-
-// Parse timestamp as ISO string (OID 1184)
-types.setTypeParser(1184, (val: string) => val);
 
 /**
  * Generate a deterministic book ID from file contents using keccak256 → UUID v5.
@@ -62,256 +54,150 @@ export function generateTranslationId(sourceBlockId: string, lang: string, model
   return uuidv5(`${sourceBlockId}:${lang}:${model}`, TRANSLATION_NAMESPACE);
 }
 
-/**
- * Guess MIME type from file extension.
- */
-function guessMimeType(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  const mimeMap: Record<string, string> = {
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.png': 'image/png',
-    '.gif': 'image/gif',
-    '.svg': 'image/svg+xml',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-    '.ico': 'image/x-icon',
-    '.tiff': 'image/tiff',
-    '.tif': 'image/tiff',
-  };
-  return mimeMap[ext] || 'application/octet-stream';
+/** Normalize a non-null Date/string timestamp into an ISO string. */
+function iso(v: unknown): string {
+  if (v instanceof Date) return v.toISOString();
+  return String(v);
 }
 
-let _pool: Pool | null = null;
-
-function getPool(connectionString?: string): Pool {
-  if (!_pool || _pool.ended) {
-    _pool = new Pool({
-      connectionString: connectionString || process.env.DATABASE_URL || DATABASE_URL,
-      max: 10,
-    });
-  }
-  return _pool;
+/** Normalize a nullable Date/string timestamp into an ISO string or null. */
+function isoOpt(v: unknown): string | null {
+  if (v == null) return null;
+  if (v instanceof Date) return v.toISOString();
+  return String(v);
 }
 
 /**
  * PostgreSQL database manager for docs, blocks, and files.
+ *
+ * Backed by Sequelize 7 models (src/models) and an Umzug migration runner
+ * (src/migrations). Simple CRUD goes through the models; relational queries
+ * that the ORM cannot express faithfully (LATERAL joins, SKIP LOCKED task
+ * claiming, COUNT FILTER, ON CONFLICT DO UPDATE for translations) use
+ * `sequelize.query` with raw SQL — the same SQL the previous raw-pg layer used.
  *
  * The blocks table stores both originals and translations:
  *   - Original: lang = source lang, model = NULL, source_id = NULL
  *   - Translation: lang = target lang, model = model name, source_id = original block ID
  */
 export class TranslateDb {
-  private pool: Pool;
+  private _sequelize;
 
   constructor(connectionString?: string) {
-    this.pool = getPool(connectionString);
+    this._sequelize = getSequelize(connectionString);
   }
 
   /**
    * Run database migrations (idempotent — safe to call on every startup).
    */
   async migrate(): Promise<void> {
-    // Migrate: rename books → docs (for existing databases)
-    await this.pool.query(`
-      DO $$
-      BEGIN
-        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'books') THEN
-          ALTER TABLE books RENAME TO docs;
-        END IF;
-      END $$;
-    `);
-
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS docs (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        author TEXT NOT NULL DEFAULT '',
-        language TEXT NOT NULL DEFAULT '',
-        filename TEXT NOT NULL DEFAULT '',
-        total_blocks INTEGER NOT NULL DEFAULT 0,
-        translated_blocks INTEGER NOT NULL DEFAULT 0,
-        target_lang TEXT,
-        source_lang TEXT,
-        model TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        completed_at TIMESTAMPTZ
-      );
-
-      CREATE TABLE IF NOT EXISTS files (
-        id TEXT PRIMARY KEY,
-        book_id TEXT NOT NULL,
-        original_path TEXT NOT NULL,
-        mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
-        data BYTEA NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        FOREIGN KEY (book_id) REFERENCES docs(id) ON DELETE CASCADE
-      );
-
-      CREATE TABLE IF NOT EXISTS blocks (
-        id TEXT PRIMARY KEY,
-        book_id TEXT NOT NULL,
-        block_index INTEGER NOT NULL,
-        doc_path TEXT NOT NULL,
-        type TEXT NOT NULL,
-        content TEXT NOT NULL DEFAULT '',
-        lang TEXT NOT NULL,
-        model TEXT,
-        source_id TEXT,
-        file_id TEXT,
-        tag_name TEXT NOT NULL DEFAULT 'p',
-        attributes TEXT NOT NULL DEFAULT '{}',
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        FOREIGN KEY (book_id) REFERENCES docs(id) ON DELETE CASCADE,
-        FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE SET NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS tasks (
-        id TEXT PRIMARY KEY,
-        doc_id TEXT NOT NULL,
-        type TEXT NOT NULL DEFAULT 'ocr_page',
-        page_num INTEGER,
-        total_pages INTEGER,
-        status TEXT NOT NULL DEFAULT 'pending',
-        content TEXT,
-        error TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        completed_at TIMESTAMPTZ,
-        FOREIGN KEY (doc_id) REFERENCES docs(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_blocks_book_id ON blocks(book_id);
-      CREATE INDEX IF NOT EXISTS idx_blocks_book_doc ON blocks(book_id, doc_path);
-      CREATE INDEX IF NOT EXISTS idx_blocks_book_index ON blocks(book_id, block_index);
-      CREATE INDEX IF NOT EXISTS idx_blocks_file_id ON blocks(file_id);
-      CREATE INDEX IF NOT EXISTS idx_blocks_source_id ON blocks(source_id);
-      CREATE INDEX IF NOT EXISTS idx_blocks_lang ON blocks(book_id, lang);
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_blocks_translation_unique ON blocks(source_id, lang, model) WHERE source_id IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS idx_files_book_id ON files(book_id);
-      CREATE INDEX IF NOT EXISTS idx_files_original_path ON files(book_id, original_path);
-      CREATE INDEX IF NOT EXISTS idx_tasks_doc_id ON tasks(doc_id);
-      CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-      CREATE INDEX IF NOT EXISTS idx_tasks_doc_status ON tasks(doc_id, status);
-    `);
-
-    // Add new columns to docs table (idempotent — ADD COLUMN IF NOT EXISTS)
-    await this.pool.query(`
-      ALTER TABLE docs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'uploaded';
-      ALTER TABLE docs ADD COLUMN IF NOT EXISTS total_pages INTEGER NOT NULL DEFAULT 0;
-      ALTER TABLE docs ADD COLUMN IF NOT EXISTS parsed_pages INTEGER NOT NULL DEFAULT 0;
-      ALTER TABLE docs ADD COLUMN IF NOT EXISTS source_path TEXT;
-    `);
+    await runMigrations();
   }
 
   // ─── Doc CRUD ─────────────────────────────────────────────
 
   async insertBook(book: Partial<Omit<BookRecord, 'createdAt' | 'completedAt' | 'translatedBlocks'>> & { id: string; title: string; author: string; language: string; filename: string; totalBlocks: number; translatedBlocks?: number }): Promise<void> {
-    await this.pool.query(`
-      INSERT INTO docs (id, title, author, language, filename, total_blocks, translated_blocks, target_lang, source_lang, model, status, total_pages, parsed_pages, source_path)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-      ON CONFLICT (id) DO NOTHING
-    `, [
-      book.id,
-      book.title,
-      book.author,
-      book.language,
-      book.filename,
-      book.totalBlocks,
-      book.translatedBlocks ?? 0,
-      book.targetLang ?? null,
-      book.sourceLang ?? null,
-      book.model ?? null,
-      book.status ?? 'uploaded',
-      book.totalPages ?? 0,
-      book.parsedPages ?? 0,
-      book.sourcePath ?? null,
-    ]);
+    await Doc.bulkCreate([
+      {
+        id: book.id,
+        title: book.title,
+        author: book.author,
+        language: book.language,
+        filename: book.filename,
+        totalBlocks: book.totalBlocks,
+        translatedBlocks: book.translatedBlocks ?? 0,
+        targetLang: book.targetLang ?? null,
+        sourceLang: book.sourceLang ?? null,
+        model: book.model ?? null,
+        status: book.status ?? 'uploaded',
+        totalPages: book.totalPages ?? 0,
+        parsedPages: book.parsedPages ?? 0,
+        sourcePath: book.sourcePath ?? null,
+      },
+    ], { ignoreDuplicates: true, validate: false });
   }
 
   async getBook(id: string): Promise<BookRecord | undefined> {
-    const { rows } = await this.pool.query('SELECT * FROM docs WHERE id = $1', [id]);
-    if (rows.length === 0) return undefined;
-    return this.mapBookRow(rows[0]);
+    const row = await Doc.findByPk(id, { raw: true });
+    return row ? this.toBookRecord(row) : undefined;
   }
 
   async updateBookProgress(bookId: string, translatedBlocks: number): Promise<void> {
-    await this.pool.query('UPDATE docs SET translated_blocks = $1 WHERE id = $2', [translatedBlocks, bookId]);
+    await Doc.update({ translatedBlocks }, { where: { id: bookId } });
   }
 
   async completeBook(bookId: string): Promise<void> {
-    await this.pool.query(`
-      UPDATE docs SET completed_at = now(), translated_blocks = total_blocks WHERE id = $1
-    `, [bookId]);
+    // References the total_blocks column in the SET — kept as raw SQL.
+    await this.sequelize.query(
+      'UPDATE docs SET completed_at = now(), translated_blocks = total_blocks WHERE id = $1',
+      { bind: [bookId] },
+    );
   }
 
   async setBookTranslationConfig(bookId: string, targetLang: string, sourceLang: string, model: string): Promise<void> {
-    await this.pool.query(`
-      UPDATE docs SET target_lang = $1, source_lang = $2, model = $3 WHERE id = $4
-    `, [targetLang, sourceLang, model, bookId]);
+    await Doc.update({ targetLang, sourceLang, model }, { where: { id: bookId } });
   }
 
   async listBooks(): Promise<BookRecord[]> {
-    const { rows } = await this.pool.query('SELECT * FROM docs ORDER BY created_at DESC');
-    return rows.map((r: Record<string, any>) => this.mapBookRow(r));
+    const rows = await Doc.findAll({ order: [['createdAt', 'DESC']], raw: true });
+    return rows.map((r: Record<string, any>) => this.toBookRecord(r));
   }
 
   async deleteBook(bookId: string): Promise<void> {
-    await this.pool.query('DELETE FROM blocks WHERE book_id = $1', [bookId]);
-    await this.pool.query('DELETE FROM files WHERE book_id = $1', [bookId]);
-    await this.pool.query('DELETE FROM docs WHERE id = $1', [bookId]);
+    // FK ON DELETE CASCADE removes blocks, files, and tasks for this doc.
+    await Doc.destroy({ where: { id: bookId } });
   }
 
   // ─── Block CRUD ────────────────────────────────────────────
 
   /**
    * Insert original blocks (lang set on each block, model = NULL, sourceId = NULL).
-   * Uses ON CONFLICT (id) DO NOTHING for dedup.
+   * Uses ON CONFLICT (id) DO NOTHING (via ignoreDuplicates) for dedup.
    */
   async insertBlocks(blocks: Block[]): Promise<void> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      for (const b of blocks) {
-        await client.query(`
-          INSERT INTO blocks (id, book_id, block_index, doc_path, type, content, lang, model, source_id, file_id, tag_name, attributes)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-          ON CONFLICT (id) DO NOTHING
-        `, [
-          b.id, b.bookId, b.index, b.docPath, b.type,
-          b.content, b.lang, b.model ?? null, b.sourceId ?? null,
-          b.fileId, b.tagName, b.attributes,
-        ]);
-      }
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
-    }
+    await this.sequelize.transaction(async (t) => {
+      await BlockModel.bulkCreate(
+        blocks.map((b) => ({
+          id: b.id,
+          bookId: b.bookId,
+          index: b.index,
+          docPath: b.docPath,
+          type: b.type,
+          content: b.content,
+          lang: b.lang,
+          model: b.model ?? null,
+          sourceId: b.sourceId ?? null,
+          fileId: b.fileId,
+          tagName: b.tagName,
+          attributes: b.attributes,
+        })),
+        { ignoreDuplicates: true, validate: false, transaction: t },
+      );
+    });
   }
 
   /**
    * Get all original blocks for a book (where source_id IS NULL).
    */
   async getBlocksByBook(bookId: string): Promise<Block[]> {
-    const { rows } = await this.pool.query(
-      'SELECT * FROM blocks WHERE book_id = $1 AND source_id IS NULL ORDER BY block_index',
-      [bookId]
-    );
-    return rows.map((r: Record<string, any>) => this.mapBlockRow(r));
+    const rows = await BlockModel.findAll({
+      where: { bookId, sourceId: null },
+      order: [['index', 'ASC']],
+      raw: true,
+    });
+    return rows.map((r: Record<string, any>) => this.toBlockRecord(r));
   }
 
   /**
    * Get original blocks for a specific document.
    */
   async getBlocksByDoc(bookId: string, docPath: string): Promise<Block[]> {
-    const { rows } = await this.pool.query(
-      'SELECT * FROM blocks WHERE book_id = $1 AND doc_path = $2 AND source_id IS NULL ORDER BY block_index',
-      [bookId, docPath]
-    );
-    return rows.map((r: Record<string, any>) => this.mapBlockRow(r));
+    const rows = await BlockModel.findAll({
+      where: { bookId, docPath, sourceId: null },
+      order: [['index', 'ASC']],
+      raw: true,
+    });
+    return rows.map((r: Record<string, any>) => this.toBlockRecord(r));
   }
 
   /**
@@ -321,7 +207,7 @@ export class TranslateDb {
    */
   async getUntranslatedBlocks(bookId: string, targetLang: string, model?: string): Promise<Block[]> {
     if (model) {
-      const { rows } = await this.pool.query(`
+      const rows = await this.sequelize.query(`
         SELECT b.* FROM blocks b
         WHERE b.book_id = $1
           AND b.source_id IS NULL
@@ -330,10 +216,10 @@ export class TranslateDb {
             SELECT 1 FROM blocks t WHERE t.source_id = b.id AND t.lang = $2 AND t.model = $3
           )
         ORDER BY b.block_index
-      `, [bookId, targetLang, model]);
-      return rows.map((r: Record<string, any>) => this.mapBlockRow(r));
+      `, { bind: [bookId, targetLang, model], type: QueryTypes.SELECT });
+      return (rows as Record<string, any>[]).map((r) => this.mapBlockRow(r));
     }
-    const { rows } = await this.pool.query(`
+    const rows = await this.sequelize.query(`
       SELECT b.* FROM blocks b
       WHERE b.book_id = $1
         AND b.source_id IS NULL
@@ -342,8 +228,8 @@ export class TranslateDb {
           SELECT 1 FROM blocks t WHERE t.source_id = b.id AND t.lang = $2
         )
       ORDER BY b.block_index
-    `, [bookId, targetLang]);
-    return rows.map((r: Record<string, any>) => this.mapBlockRow(r));
+    `, { bind: [bookId, targetLang], type: QueryTypes.SELECT });
+    return (rows as Record<string, any>[]).map((r) => this.mapBlockRow(r));
   }
 
   /**
@@ -351,7 +237,7 @@ export class TranslateDb {
    * Returns original blocks with a `translatedContent` field set from translation rows.
    */
   async getBlocksByBookWithTranslations(bookId: string, targetLang: string, model?: string): Promise<Block[]> {
-    const { rows } = await this.pool.query(`
+    const rows = await this.sequelize.query(`
       SELECT b.*, t.content AS translated_content
       FROM blocks b
       LEFT JOIN LATERAL (
@@ -364,9 +250,9 @@ export class TranslateDb {
       ) t ON true
       WHERE b.book_id = $1 AND b.source_id IS NULL
       ORDER BY b.block_index
-    `, model ? [bookId, targetLang, model] : [bookId, targetLang]);
+    `, { bind: model ? [bookId, targetLang, model] : [bookId, targetLang], type: QueryTypes.SELECT });
 
-    return rows.map((r: Record<string, any>) => ({
+    return (rows as Record<string, any>[]).map((r) => ({
       ...this.mapBlockRow(r),
       translatedContent: r.translated_content ?? null,
     }));
@@ -382,7 +268,7 @@ export class TranslateDb {
       modelFilter = 'AND t.model = $4';
       params.push(model);
     }
-    const { rows } = await this.pool.query(`
+    const rows = await this.sequelize.query(`
       SELECT b.*, t.content AS translated_content
       FROM blocks b
       LEFT JOIN LATERAL (
@@ -395,9 +281,9 @@ export class TranslateDb {
       ) t ON true
       WHERE b.book_id = $1 AND b.source_id IS NULL AND b.doc_path = $3
       ORDER BY b.block_index
-    `, params);
+    `, { bind: params, type: QueryTypes.SELECT });
 
-    return rows.map((r: Record<string, any>) => ({
+    return (rows as Record<string, any>[]).map((r) => ({
       ...this.mapBlockRow(r),
       translatedContent: r.translated_content ?? null,
     }));
@@ -411,7 +297,7 @@ export class TranslateDb {
         modelFilter = 'AND model = $3';
         params.push(model);
       }
-      const { rows } = await this.pool.query(`
+      const rows = await this.sequelize.query(`
         SELECT
           COUNT(*) as total,
           COALESCE(SUM(CASE WHEN t.source_id IS NOT NULL THEN 1 ELSE 0 END), 0) as translated
@@ -420,21 +306,24 @@ export class TranslateDb {
           SELECT DISTINCT source_id FROM blocks WHERE lang = $2 AND source_id IS NOT NULL ${modelFilter}
         ) t ON t.source_id = b.id
         WHERE b.book_id = $1 AND b.source_id IS NULL
-      `, params);
-      return { total: parseInt(rows[0].total), translated: parseInt(rows[0].translated) };
+      `, { bind: params, type: QueryTypes.SELECT });
+      const row = (rows as Record<string, any>[])[0];
+      return { total: parseInt(row.total), translated: parseInt(row.translated) };
     }
-    const { rows } = await this.pool.query(`
-      SELECT COUNT(*) as total, 0 as translated FROM blocks WHERE book_id = $1 AND source_id IS NULL
-    `, [bookId]);
-    return { total: parseInt(rows[0].total), translated: 0 };
+    const rows = await this.sequelize.query(
+      'SELECT COUNT(*) as total, 0 as translated FROM blocks WHERE book_id = $1 AND source_id IS NULL',
+      { bind: [bookId], type: QueryTypes.SELECT },
+    );
+    const row = (rows as Record<string, any>[])[0];
+    return { total: parseInt(row.total), translated: 0 };
   }
 
   async getDocPaths(bookId: string): Promise<string[]> {
-    const { rows } = await this.pool.query(
+    const rows = await this.sequelize.query(
       'SELECT doc_path, MIN(block_index) AS min_idx FROM blocks WHERE book_id = $1 AND source_id IS NULL GROUP BY doc_path ORDER BY min_idx',
-      [bookId]
+      { bind: [bookId], type: QueryTypes.SELECT },
     );
-    return rows.map((r: Record<string, any>) => r.doc_path);
+    return (rows as Record<string, any>[]).map((r) => r.doc_path);
   }
 
   // ─── Translation CRUD (uses blocks table with source_id) ───
@@ -446,140 +335,132 @@ export class TranslateDb {
    */
   async upsertTranslation(sourceBlock: Block, translatedContent: string, lang: string, model: string): Promise<void> {
     const id = generateTranslationId(sourceBlock.id, lang, model);
-    await this.pool.query(`
+    await this.sequelize.query(`
       INSERT INTO blocks (id, book_id, block_index, doc_path, type, content, lang, model, source_id, file_id, tag_name, attributes)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, created_at = now()
-    `, [
-      id, sourceBlock.bookId, sourceBlock.index, sourceBlock.docPath, sourceBlock.type,
-      translatedContent, lang, model, sourceBlock.id,
-      sourceBlock.fileId, sourceBlock.tagName, sourceBlock.attributes,
-    ]);
+    `, {
+      bind: [
+        id, sourceBlock.bookId, sourceBlock.index, sourceBlock.docPath, sourceBlock.type,
+        translatedContent, lang, model, sourceBlock.id,
+        sourceBlock.fileId, sourceBlock.tagName, sourceBlock.attributes,
+      ],
+    });
   }
 
   /**
    * Get the latest translation block for a source block in a specific language.
    */
   async getTranslation(sourceBlockId: string, lang: string, model?: string): Promise<Block | undefined> {
-    let query = 'SELECT * FROM blocks WHERE source_id = $1 AND lang = $2';
-    const params: any[] = [sourceBlockId, lang];
-    if (model) {
-      query += ' AND model = $3';
-      params.push(model);
-    }
-    query += ' ORDER BY created_at DESC LIMIT 1';
-    const { rows } = await this.pool.query(query, params);
+    const where: Record<string, any> = { sourceId: sourceBlockId, lang };
+    if (model) where.model = model;
+    const rows = await BlockModel.findAll({
+      where,
+      order: [['createdAt', 'DESC']],
+      limit: 1,
+      raw: true,
+    });
     if (rows.length === 0) return undefined;
-    return this.mapBlockRow(rows[0]);
+    return this.toBlockRecord(rows[0] as Record<string, any>);
   }
 
   /**
    * Get all translation blocks for a source block.
    */
   async getTranslationsByBlock(sourceBlockId: string): Promise<Block[]> {
-    const { rows } = await this.pool.query(
-      'SELECT * FROM blocks WHERE source_id = $1 ORDER BY created_at DESC',
-      [sourceBlockId]
-    );
-    return rows.map((r: Record<string, any>) => this.mapBlockRow(r));
+    const rows = await BlockModel.findAll({
+      where: { sourceId: sourceBlockId },
+      order: [['createdAt', 'DESC']],
+      raw: true,
+    });
+    return rows.map((r: Record<string, any>) => this.toBlockRecord(r));
   }
 
   // ─── File CRUD ─────────────────────────────────────────────
 
   async insertFile(file: FileRecord): Promise<void> {
-    await this.pool.query(`
-      INSERT INTO files (id, book_id, original_path, mime_type, data, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (id) DO NOTHING
-    `, [file.id, file.bookId, file.originalPath, file.mimeType, file.data, file.createdAt]);
+    await FileModel.bulkCreate([
+      {
+        id: file.id,
+        bookId: file.bookId,
+        originalPath: file.originalPath,
+        mimeType: file.mimeType,
+        data: file.data,
+      },
+    ], { ignoreDuplicates: true, validate: false });
   }
 
   async insertFiles(files: FileRecord[]): Promise<void> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      for (const f of files) {
-        await client.query(`
-          INSERT INTO files (id, book_id, original_path, mime_type, data, created_at)
-          VALUES ($1, $2, $3, $4, $5, $6)
-          ON CONFLICT (id) DO NOTHING
-        `, [f.id, f.bookId, f.originalPath, f.mimeType, f.data, f.createdAt]);
-      }
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
-    }
+    await this.sequelize.transaction(async (t) => {
+      await FileModel.bulkCreate(
+        files.map((f) => ({
+          id: f.id,
+          bookId: f.bookId,
+          originalPath: f.originalPath,
+          mimeType: f.mimeType,
+          data: f.data,
+        })),
+        { ignoreDuplicates: true, validate: false, transaction: t },
+      );
+    });
   }
 
   async getFile(id: string): Promise<FileRecord | undefined> {
-    const { rows } = await this.pool.query('SELECT * FROM files WHERE id = $1', [id]);
-    if (rows.length === 0) return undefined;
-    return this.mapFileRow(rows[0]);
+    const row = await FileModel.findByPk(id, { raw: true });
+    return row ? this.toFileRecord(row as Record<string, any>) : undefined;
   }
 
   async getFileByPath(bookId: string, originalPath: string): Promise<FileRecord | undefined> {
-    const { rows } = await this.pool.query(
-      'SELECT * FROM files WHERE book_id = $1 AND original_path = $2',
-      [bookId, originalPath]
-    );
-    if (rows.length === 0) return undefined;
-    return this.mapFileRow(rows[0]);
+    const row = await FileModel.findOne({ where: { bookId, originalPath }, raw: true });
+    return row ? this.toFileRecord(row as Record<string, any>) : undefined;
   }
 
   async getFilesByBook(bookId: string): Promise<FileRecord[]> {
-    const { rows } = await this.pool.query('SELECT * FROM files WHERE book_id = $1', [bookId]);
-    return rows.map((r: Record<string, any>) => this.mapFileRow(r));
+    const rows = await FileModel.findAll({ where: { bookId }, raw: true });
+    return rows.map((r: Record<string, any>) => this.toFileRecord(r));
   }
 
   async deleteFilesByBook(bookId: string): Promise<void> {
-    await this.pool.query('DELETE FROM files WHERE book_id = $1', [bookId]);
+    await FileModel.destroy({ where: { bookId } });
   }
 
   // ─── Doc status ────────────────────────────────────────────
 
   async updateDocStatus(docId: string, status: string, extra?: { totalPages?: number; parsedPages?: number }): Promise<void> {
     if (extra?.totalPages !== undefined && extra?.parsedPages !== undefined) {
-      await this.pool.query('UPDATE docs SET status = $1, total_pages = $2, parsed_pages = $3 WHERE id = $4', [status, extra.totalPages, extra.parsedPages, docId]);
+      await Doc.update({ status, totalPages: extra.totalPages, parsedPages: extra.parsedPages }, { where: { id: docId } });
     } else if (extra?.totalPages !== undefined) {
-      await this.pool.query('UPDATE docs SET status = $1, total_pages = $2 WHERE id = $3', [status, extra.totalPages, docId]);
+      await Doc.update({ status, totalPages: extra.totalPages }, { where: { id: docId } });
     } else if (extra?.parsedPages !== undefined) {
-      await this.pool.query('UPDATE docs SET status = $1, parsed_pages = $2 WHERE id = $3', [status, extra.parsedPages, docId]);
+      await Doc.update({ status, parsedPages: extra.parsedPages }, { where: { id: docId } });
     } else {
-      await this.pool.query('UPDATE docs SET status = $1 WHERE id = $2', [status, docId]);
+      await Doc.update({ status }, { where: { id: docId } });
     }
   }
 
   async updateTotalBlocks(docId: string, totalBlocks: number): Promise<void> {
-    await this.pool.query('UPDATE docs SET total_blocks = $1 WHERE id = $2', [totalBlocks, docId]);
+    await Doc.update({ totalBlocks }, { where: { id: docId } });
   }
 
   // ─── Task CRUD ─────────────────────────────────────────────
 
   async createTasks(tasks: Array<{ id: string; docId: string; type: string; pageNum: number; totalPages: number }>): Promise<void> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      for (const t of tasks) {
-        await client.query(`
-          INSERT INTO tasks (id, doc_id, type, page_num, total_pages, status)
-          VALUES ($1, $2, $3, $4, $5, 'pending')
-          ON CONFLICT (id) DO NOTHING
-        `, [t.id, t.docId, t.type, t.pageNum, t.totalPages]);
-      }
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
-    }
+    await this.sequelize.transaction(async (t) => {
+      await TaskModel.bulkCreate(
+        tasks.map((tk) => ({
+          id: tk.id,
+          docId: tk.docId,
+          type: tk.type,
+          pageNum: tk.pageNum,
+          totalPages: tk.totalPages,
+        })),
+        { ignoreDuplicates: true, validate: false, transaction: t },
+      );
+    });
   }
 
   async getNextTask(): Promise<TaskRecord | undefined> {
-    const { rows } = await this.pool.query(`
+    const [rows] = await this.sequelize.query(`
       UPDATE tasks SET status = 'processing', updated_at = now()
       WHERE id = (
         SELECT id FROM tasks WHERE status = 'pending'
@@ -589,31 +470,31 @@ export class TranslateDb {
       )
       RETURNING *
     `);
-    if (rows.length === 0) return undefined;
-    return this.mapTaskRow(rows[0]);
+    const row = (rows as Record<string, any>[])[0];
+    return row ? this.mapTaskRow(row) : undefined;
   }
 
   async completeTask(taskId: string, content: string): Promise<void> {
-    await this.pool.query(`
-      UPDATE tasks SET status = 'completed', content = $1, completed_at = now(), updated_at = now()
-      WHERE id = $2
-    `, [content, taskId]);
+    await TaskModel.update(
+      { status: 'completed', content, completedAt: sql.fn('now'), updatedAt: sql.fn('now') },
+      { where: { id: taskId } },
+    );
   }
 
   async failTask(taskId: string, error: string): Promise<void> {
-    await this.pool.query(`
-      UPDATE tasks SET status = 'failed', error = $1, completed_at = now(), updated_at = now()
-      WHERE id = $2
-    `, [error, taskId]);
+    await TaskModel.update(
+      { status: 'failed', error, completedAt: sql.fn('now'), updatedAt: sql.fn('now') },
+      { where: { id: taskId } },
+    );
   }
 
   async getTasksByDoc(docId: string): Promise<TaskRecord[]> {
-    const { rows } = await this.pool.query('SELECT * FROM tasks WHERE doc_id = $1 ORDER BY page_num', [docId]);
-    return rows.map((r: Record<string, any>) => this.mapTaskRow(r));
+    const rows = await TaskModel.findAll({ where: { docId }, order: [['pageNum', 'ASC']], raw: true });
+    return rows.map((r: Record<string, any>) => this.toTaskRecord(r));
   }
 
   async getTaskCounts(docId: string): Promise<{ total: number; completed: number; failed: number; pending: number; processing: number }> {
-    const { rows } = await this.pool.query(`
+    const rows = await this.sequelize.query(`
       SELECT
         COUNT(*) as total,
         COUNT(*) FILTER (WHERE status = 'completed') as completed,
@@ -621,61 +502,108 @@ export class TranslateDb {
         COUNT(*) FILTER (WHERE status = 'pending') as pending,
         COUNT(*) FILTER (WHERE status = 'processing') as processing
       FROM tasks WHERE doc_id = $1
-    `, [docId]);
+    `, { bind: [docId], type: QueryTypes.SELECT });
+    const row = (rows as Record<string, any>[])[0];
     return {
-      total: parseInt(rows[0].total),
-      completed: parseInt(rows[0].completed),
-      failed: parseInt(rows[0].failed),
-      pending: parseInt(rows[0].pending),
-      processing: parseInt(rows[0].processing),
+      total: parseInt(row.total),
+      completed: parseInt(row.completed),
+      failed: parseInt(row.failed),
+      pending: parseInt(row.pending),
+      processing: parseInt(row.processing),
     };
   }
 
   async countProcessingTasks(): Promise<number> {
-    const { rows } = await this.pool.query(`SELECT COUNT(*) as cnt FROM tasks WHERE status = 'processing'`);
-    return parseInt(rows[0].cnt);
+    return TaskModel.count({ where: { status: 'processing' } });
   }
 
   // ─── General ───────────────────────────────────────────────
 
   async close(): Promise<void> {
-    // Don't close the pool — it's shared. Just release any client references.
+    // Don't close the sequelize instance — it's shared. Just a no-op.
   }
 
   static async closePool(): Promise<void> {
-    if (_pool && !_pool.ended) {
-      await _pool.end();
-      _pool = null;
-    }
+    await closeSequelize();
   }
 
-  get raw(): Pool {
-    return this.pool;
+  /** The shared Sequelize instance (used for raw queries / migrations). */
+  get sequelize() {
+    return this._sequelize;
   }
 
   // ─── Private helpers ──────────────────────────────────────
 
-  private mapBookRow(row: Record<string, any>): BookRecord {
+  /** Map a model row (camelCase attributes) → BookRecord. */
+  private toBookRecord(row: Record<string, any>): BookRecord {
     return {
       id: row.id,
       title: row.title,
       author: row.author,
       language: row.language,
       filename: row.filename,
-      totalBlocks: row.total_blocks,
-      translatedBlocks: row.translated_blocks,
-      targetLang: row.target_lang,
-      sourceLang: row.source_lang,
+      totalBlocks: row.totalBlocks,
+      translatedBlocks: row.translatedBlocks,
+      targetLang: row.targetLang,
+      sourceLang: row.sourceLang,
       model: row.model,
-      createdAt: row.created_at,
-      completedAt: row.completed_at,
+      createdAt: iso(row.createdAt),
+      completedAt: isoOpt(row.completedAt),
       status: row.status ?? 'uploaded',
-      totalPages: row.total_pages ?? 0,
-      parsedPages: row.parsed_pages ?? 0,
-      sourcePath: row.source_path ?? null,
+      totalPages: row.totalPages ?? 0,
+      parsedPages: row.parsedPages ?? 0,
+      sourcePath: row.sourcePath ?? null,
     };
   }
 
+  /** Map a model row (camelCase attributes) → Block. */
+  private toBlockRecord(row: Record<string, any>): Block {
+    return {
+      id: row.id,
+      bookId: row.bookId,
+      index: row.index,
+      docPath: row.docPath,
+      type: row.type as BlockType,
+      content: row.content,
+      lang: row.lang,
+      model: row.model,
+      sourceId: row.sourceId,
+      fileId: row.fileId,
+      tagName: row.tagName,
+      attributes: row.attributes,
+    };
+  }
+
+  /** Map a model row (camelCase attributes) → FileRecord. */
+  private toFileRecord(row: Record<string, any>): FileRecord {
+    return {
+      id: row.id,
+      bookId: row.bookId,
+      originalPath: row.originalPath,
+      mimeType: row.mimeType,
+      data: row.data,
+      createdAt: iso(row.createdAt),
+    };
+  }
+
+  /** Map a model row (camelCase attributes) → TaskRecord. */
+  private toTaskRecord(row: Record<string, any>): TaskRecord {
+    return {
+      id: row.id,
+      docId: row.docId,
+      type: row.type,
+      pageNum: row.pageNum,
+      totalPages: row.totalPages,
+      status: row.status,
+      content: row.content,
+      error: row.error,
+      createdAt: iso(row.createdAt),
+      updatedAt: iso(row.updatedAt),
+      completedAt: isoOpt(row.completedAt),
+    };
+  }
+
+  /** Map a raw SQL row (snake_case columns) → Block. */
   private mapBlockRow(row: Record<string, any>): Block {
     return {
       id: row.id,
@@ -693,17 +621,7 @@ export class TranslateDb {
     };
   }
 
-  private mapFileRow(row: Record<string, any>): FileRecord {
-    return {
-      id: row.id,
-      bookId: row.book_id,
-      originalPath: row.original_path,
-      mimeType: row.mime_type,
-      data: row.data,
-      createdAt: row.created_at,
-    };
-  }
-
+  /** Map a raw SQL row (snake_case columns) → TaskRecord. */
   private mapTaskRow(row: Record<string, any>): TaskRecord {
     return {
       id: row.id,
@@ -714,9 +632,9 @@ export class TranslateDb {
       status: row.status,
       content: row.content,
       error: row.error,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      completedAt: row.completed_at,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+      completedAt: isoOpt(row.completed_at),
     };
   }
 }

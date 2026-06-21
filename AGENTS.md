@@ -6,8 +6,8 @@ Blocks are extracted per-paragraph, stored in PostgreSQL, translated one-by-one,
 
 ## Tech Stack
 - **Runtime:** Node.js 22+ (ES modules)
-- **Language:** TypeScript (strict)
-- **DB:** PostgreSQL (via pg, database `ai_translate`)
+- **Language:** TypeScript (strict, with experimental decorators for Sequelize models)
+- **DB:** PostgreSQL (database `ai_translate`), accessed via Sequelize 7 (`@sequelize/core` + `@sequelize/postgres`); migrations via Umzug
 - **Web:** Express 5 + WebSocket (ws)
 - **Translation:** OpenAI-compatible /v1/chat/completions API (Ollama, LM Studio, OpenAI, etc.)
 - **Testing:** Vitest
@@ -23,7 +23,10 @@ Output EPUB ← Block Assembler ← Translated blocks ← OllamaClient (block-by
 ```
 
 ### Key Modules
-- `src/db/database.ts` — TranslateDb: PostgreSQL books, blocks, files tables, UUID v5 IDs
+- `src/db/database.ts` — `TranslateDb`: a Sequelize-backed facade (same method signatures as the old raw-pg layer) over the models below. Simple CRUD uses the models; relational queries the ORM can't express (LATERAL joins, `FOR UPDATE SKIP LOCKED`, `COUNT FILTER`, `ON CONFLICT` upserts) use `sequelize.query` with raw SQL. UUID v5 ID generators live here.
+- `src/models/` — Sequelize 7 (`@sequelize/core`) decorator models: `doc.ts` (`docs`), `block.ts` (`blocks`), `file.ts` (`files`, BYTEA), `task.ts` (`tasks`); `index.ts` holds the shared `Sequelize` singleton + `getSequelize`/`closeSequelize`.
+- `src/migrations/` — Umzug migration files (versioned, `up`/`down`). `0001-initial-schema.ts` replicates the original schema (idempotent `IF NOT EXISTS`).
+- `src/db/migrate.ts` — Umzug runner: exports `runMigrations()` (used by `TranslateDb.migrate()`) and is the `npm run db:migrate` CLI. State is tracked in the `schema_migrations` table via `src/db/migration-storage.ts` (custom storage — umzug's `SequelizeStorage` is v6-only).
 - `src/parsers/block-extractor.ts` — HTML → Markdown blocks (via Turndown)
 - `src/parsers/block-assembler.ts` — Markdown blocks → HTML (via markdown-it)
 - `src/translators/ollama-client.ts` — OpenAI-compatible /v1/chat/completions streaming
@@ -51,6 +54,7 @@ Output EPUB ← Block Assembler ← Translated blocks ← OllamaClient (block-by
 - `npm run dev -- book.epub -l ru` — translate via CLI
 - `npm run web` — start web UI on port 3000
 - `npm run typecheck` — tsc --noEmit
+- `npm run db:migrate` — run pending Umzug migrations (also run automatically on server/CLI/test startup via `TranslateDb.migrate()`)
 
 ## Workflow Rules (MANDATORY)
 At the end of every task, before reporting completion, you MUST:
@@ -74,7 +78,13 @@ See `.env.example` — DATABASE_URL, OPENAI_BASE_URL, TRANSLATE_MODEL, OCR_MODEL
 ```
 src/
   cli/commands.ts       — CLI (translate, web subcommands)
-  db/database.ts         — PostgreSQL manager (pg, Pool)
+  db/
+    database.ts         — TranslateDb facade (Sequelize-backed) + UUID v5 ID generators
+    migrate.ts          — Umzug runner (runMigrations + db:migrate CLI)
+    migration-storage.ts — custom Umzug storage (schema_migrations table)
+  migrations/
+    0001-initial-schema.ts — initial docs/blocks/files/tasks schema
+  models/                — Sequelize 7 models (doc/block/file/task) + singleton index
   parsers/
     epub-parser.ts       — EPUB → ParsedEpub
     fb2-parser.ts         — FB2 → ParsedEpub

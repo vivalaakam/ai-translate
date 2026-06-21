@@ -18,9 +18,9 @@ beforeAll(async () => {
   await db.migrate();
 
   // Clean any leftover assembler test data
-  await db.raw.query(`DELETE FROM blocks WHERE book_id IN ('test-book-assembler','test-book-pagebreak','test-book-images')`);
-  await db.raw.query(`DELETE FROM files WHERE book_id IN ('test-book-assembler','test-book-pagebreak','test-book-images')`);
-  await db.raw.query(`DELETE FROM docs WHERE id IN ('test-book-assembler','test-book-pagebreak','test-book-images')`);
+  await db.sequelize.query(`DELETE FROM blocks WHERE book_id IN ('test-book-assembler','test-book-pagebreak','test-book-images')`);
+  await db.sequelize.query(`DELETE FROM files WHERE book_id IN ('test-book-assembler','test-book-pagebreak','test-book-images')`);
+  await db.sequelize.query(`DELETE FROM docs WHERE id IN ('test-book-assembler','test-book-pagebreak','test-book-images')`);
 
   // Create a book with some blocks
   bookId = 'test-book-assembler';
@@ -100,9 +100,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await db.raw.query(`DELETE FROM blocks WHERE book_id IN ('test-book-assembler','test-book-pagebreak','test-book-images')`);
-  await db.raw.query(`DELETE FROM files WHERE book_id IN ('test-book-assembler','test-book-pagebreak','test-book-images')`);
-  await db.raw.query(`DELETE FROM docs WHERE id IN ('test-book-assembler','test-book-pagebreak','test-book-images')`);
+  await db.sequelize.query(`DELETE FROM blocks WHERE book_id IN ('test-book-assembler','test-book-pagebreak','test-book-images')`);
+  await db.sequelize.query(`DELETE FROM files WHERE book_id IN ('test-book-assembler','test-book-pagebreak','test-book-images')`);
+  await db.sequelize.query(`DELETE FROM docs WHERE id IN ('test-book-assembler','test-book-pagebreak','test-book-images')`);
   await db.close();
   await TranslateDb.closePool();
   fs.rmSync(tmpDir, { recursive: true });

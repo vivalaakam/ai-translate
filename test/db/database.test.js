@@ -14,20 +14,20 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // Clean up any leftover test data, then close.
-  await db.raw.query(`DELETE FROM tasks WHERE doc_id LIKE 'test-%' OR doc_id LIKE 'book-%'`);
-  await db.raw.query(`DELETE FROM blocks WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
-  await db.raw.query(`DELETE FROM files WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
-  await db.raw.query(`DELETE FROM docs WHERE id LIKE 'test-%' OR id LIKE 'book-%'`);
+  await db.sequelize.query(`DELETE FROM tasks WHERE doc_id LIKE 'test-%' OR doc_id LIKE 'book-%'`);
+  await db.sequelize.query(`DELETE FROM blocks WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
+  await db.sequelize.query(`DELETE FROM files WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
+  await db.sequelize.query(`DELETE FROM docs WHERE id LIKE 'test-%' OR id LIKE 'book-%'`);
   await db.close();
   await TranslateDb.closePool();
 });
 
 // Helper to clean all test-related rows before each test for isolation
 async function cleanup() {
-  await db.raw.query(`DELETE FROM tasks WHERE doc_id LIKE 'test-%' OR doc_id LIKE 'book-%'`);
-  await db.raw.query(`DELETE FROM blocks WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
-  await db.raw.query(`DELETE FROM files WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
-  await db.raw.query(`DELETE FROM docs WHERE id LIKE 'test-%' OR id LIKE 'book-%'`);
+  await db.sequelize.query(`DELETE FROM tasks WHERE doc_id LIKE 'test-%' OR doc_id LIKE 'book-%'`);
+  await db.sequelize.query(`DELETE FROM blocks WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
+  await db.sequelize.query(`DELETE FROM files WHERE book_id LIKE 'test-%' OR book_id LIKE 'book-%'`);
+  await db.sequelize.query(`DELETE FROM docs WHERE id LIKE 'test-%' OR id LIKE 'book-%'`);
 }
 
 describe('TranslateDb', () => {
@@ -35,7 +35,7 @@ describe('TranslateDb', () => {
 
   it('should create tables on migrate', async () => {
     // After migrate() the tables must exist. Query pg_catalog.
-    const { rows } = await db.raw.query(
+    const [rows] = await db.sequelize.query(
       `SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`,
     );
     const names = rows.map((r) => r.tablename);
@@ -708,7 +708,7 @@ describe('Task CRUD', () => {
     ]);
 
     // Clean up any stray pending tasks from other tests
-    await db.raw.query(`UPDATE tasks SET status = 'cancelled' WHERE doc_id != 'test-doc-next' AND status = 'pending'`);
+    await db.sequelize.query(`UPDATE tasks SET status = 'cancelled' WHERE doc_id != 'test-doc-next' AND status = 'pending'`);
 
     const task = await db.getNextTask();
     expect(task).toBeDefined();
@@ -742,7 +742,7 @@ describe('Task CRUD', () => {
     ]);
 
     // Clean up any stray pending tasks from other tests
-    await db.raw.query(`UPDATE tasks SET status = 'cancelled' WHERE doc_id != 'test-doc-complete' AND status = 'pending'`);
+    await db.sequelize.query(`UPDATE tasks SET status = 'cancelled' WHERE doc_id != 'test-doc-complete' AND status = 'pending'`);
 
     const task = await db.getNextTask();
     expect(task).toBeDefined();
@@ -770,7 +770,7 @@ describe('Task CRUD', () => {
     ]);
 
     // Clean up any stray pending tasks from other tests
-    await db.raw.query(`UPDATE tasks SET status = 'cancelled' WHERE doc_id != 'test-doc-fail' AND status = 'pending'`);
+    await db.sequelize.query(`UPDATE tasks SET status = 'cancelled' WHERE doc_id != 'test-doc-fail' AND status = 'pending'`);
 
     const task = await db.getNextTask();
     expect(task).toBeDefined();
